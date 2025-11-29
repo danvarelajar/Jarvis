@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  jarvis:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
