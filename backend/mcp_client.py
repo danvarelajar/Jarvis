@@ -12,6 +12,8 @@ from mcp.client.sse import sse_client
 
 from mcp.client.streamable_http import streamablehttp_client
 
+import time
+
 class PersistentConnection:
     def __init__(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse"):
         self.server_name = server_name
@@ -20,9 +22,24 @@ class PersistentConnection:
         self.transport = transport
         self.session: Optional[ClientSession] = None
         self._exit_stack = None
+        
+        # Caching
+        self.tools_cache = None
+        self.tools_cache_timestamp = 0
+        
+        self.resources_cache = None
+        self.resources_cache_timestamp = 0
+        
+        self.prompts_cache = None
+        self.prompts_cache_timestamp = 0
+        
+        self.CACHE_TTL = 300  # 5 minutes
 
     async def start(self):
-        # This would need to run in a loop to handle reconnections
+        # Exponential backoff parameters
+        backoff_delay = 1
+        max_backoff = 60
+        
         while True:
             try:
                 if self.transport == "http":
@@ -32,23 +49,93 @@ class PersistentConnection:
                             self.session = session
                             print(f"Connected to {self.server_name} via HTTP")
                             await session.initialize()
+                            
+                            # Reset backoff on successful connection
+                            backoff_delay = 1
+                            
                             while True:
                                 await asyncio.sleep(1)
                 else:
                     # SSE Transport
-                    async with sse_client(self.url, headers=self.headers) as (read, write):
+                    # Set timeout to None to prevent read timeouts on long-lived connections
+                    async with sse_client(self.url, headers=self.headers, timeout=None) as (read, write):
                         async with ClientSession(read, write) as session:
                             self.session = session
                             print(f"Connected to {self.server_name} via SSE")
                             await session.initialize()
+                            
+                            # Reset backoff on successful connection
+                            backoff_delay = 1
+                            
                             while True:
                                 await asyncio.sleep(1)
             except Exception as e:
                 import traceback
-                traceback.print_exc()
+                # Only print full traceback for unexpected errors, keep logs cleaner for connection issues
+                # traceback.print_exc() 
                 print(f"Connection error for {self.server_name}: {e}")
                 self.session = None
-                await asyncio.sleep(5) # Wait before reconnecting
+                # Clear cache on disconnection
+                self.tools_cache = None
+                self.resources_cache = None
+                self.prompts_cache = None
+                
+                print(f"Reconnecting to {self.server_name} in {backoff_delay} seconds...")
+                await asyncio.sleep(backoff_delay)
+                
+                # Increase backoff
+                backoff_delay = min(backoff_delay * 2, max_backoff)
+
+    async def get_tools(self):
+        if not self.session:
+            return []
+            
+        current_time = time.time()
+        if self.tools_cache and (current_time - self.tools_cache_timestamp < self.CACHE_TTL):
+            return self.tools_cache
+            
+        try:
+            result = await self.session.list_tools()
+            self.tools_cache = [t.model_dump() for t in result.tools]
+            self.tools_cache_timestamp = current_time
+            return self.tools_cache
+        except Exception as e:
+            print(f"Error listing tools for {self.server_name}: {e}")
+            return []
+
+    async def get_resources(self):
+        if not self.session:
+            return []
+            
+        current_time = time.time()
+        if self.resources_cache and (current_time - self.resources_cache_timestamp < self.CACHE_TTL):
+            return self.resources_cache
+            
+        try:
+            result = await self.session.list_resources()
+            self.resources_cache = [r.model_dump() for r in result.resources]
+            self.resources_cache_timestamp = current_time
+            return self.resources_cache
+        except Exception as e:
+            print(f"Error listing resources for {self.server_name}: {e}")
+            return []
+
+    async def get_prompts(self):
+        if not self.session:
+            return []
+            
+        current_time = time.time()
+        if self.prompts_cache and (current_time - self.prompts_cache_timestamp < self.CACHE_TTL):
+            return self.prompts_cache
+            
+        try:
+            result = await self.session.list_prompts()
+            self.prompts_cache = [p.model_dump() for p in result.prompts]
+            self.prompts_cache_timestamp = current_time
+            return self.prompts_cache
+        except Exception as e:
+            print(f"Error listing prompts for {self.server_name}: {e}")
+            return []
 
 import json
 import os
@@ -115,20 +202,11 @@ class GlobalConnectionManager:
         tools = []
         if server_name:
             conn = self.connections.get(server_name)
-            if conn and conn.session:
-                try:
-                    result = await conn.session.list_tools()
-                    tools.extend([t.model_dump() for t in result.tools])
-                except Exception as e:
-                    print(f"Error listing tools for {server_name}: {e}")
+            if conn:
+                tools.extend(await conn.get_tools())
         else:
             for name, conn in self.connections.items():
-                if conn.session:
-                    try:
-                        result = await conn.session.list_tools()
-                        tools.extend([t.model_dump() for t in result.tools])
-                    except Exception as e:
-                        print(f"Error listing tools for {name}: {e}")
+                tools.extend(await conn.get_tools())
         return tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
