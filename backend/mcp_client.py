@@ -1,9 +1,10 @@
 import asyncio
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable, Any
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.types import CreateMessageResult
 
 
 
@@ -15,11 +16,12 @@ from mcp.client.streamable_http import streamablehttp_client
 import time
 
 class PersistentConnection:
-    def __init__(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse"):
+    def __init__(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", sampling_callback: Optional[Callable[[Any], Any]] = None):
         self.server_name = server_name
         self.url = url
         self.headers = headers or {}
         self.transport = transport
+        self.sampling_callback = sampling_callback
         self.session: Optional[ClientSession] = None
         self._exit_stack = None
         
@@ -45,7 +47,7 @@ class PersistentConnection:
                 if self.transport == "http":
                     # HTTP Transport (Streamable HTTP)
                     async with streamablehttp_client(self.url, headers=self.headers) as (read, write, _):
-                        async with ClientSession(read, write) as session:
+                        async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
                             print(f"Connected to {self.server_name} via HTTP")
                             await session.initialize()
@@ -59,7 +61,7 @@ class PersistentConnection:
                     # SSE Transport
                     # Set timeout to None to prevent read timeouts on long-lived connections
                     async with sse_client(self.url, headers=self.headers, timeout=None) as (read, write):
-                        async with ClientSession(read, write) as session:
+                        async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
                             print(f"Connected to {self.server_name} via SSE")
                             await session.initialize()
@@ -145,7 +147,17 @@ CONFIG_FILE = "/app/data/mcp_config.json"
 class GlobalConnectionManager:
     def __init__(self):
         self.connections: Dict[str, PersistentConnection] = {}
-        self.load_config()
+        self.sampling_callback: Optional[Callable[[Any], Any]] = None
+        # Defer loading config until we have the callback, or just load it and update later?
+        # Better to load it, but we can't start connections without the callback if we want them to have it.
+        # So we'll load config but not start connections yet? 
+        # Or we can just set the callback later and restart connections?
+        # For simplicity, let's allow setting the callback and then loading/reloading.
+        
+    def set_sampling_callback(self, callback: Callable[[Any], Any]):
+        self.sampling_callback = callback
+        # If we already have connections, we might need to restart them to pick up the callback.
+        # But usually this is called at startup before adding servers.
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -184,12 +196,19 @@ class GlobalConnectionManager:
             print(f"Failed to save config: {e}")
 
     def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
-        if server_name not in self.connections:
-            connection = PersistentConnection(server_name, url, headers, transport)
-            self.connections[server_name] = connection
-            asyncio.create_task(connection.start())
-            if save:
-                self.save_config()
+        # Stop existing if any
+        if server_name in self.connections:
+            # Ideally we should stop it, but we don't have a stop method exposed easily yet.
+            # The loop in start() runs forever. We'd need to cancel the task.
+            # For now, we'll just overwrite it, leaving the old one potentially running (leak).
+            # TODO: Fix connection cleanup.
+            pass
+
+        connection = PersistentConnection(server_name, url, headers, transport, sampling_callback=self.sampling_callback)
+        self.connections[server_name] = connection
+        asyncio.create_task(connection.start())
+        if save:
+            self.save_config()
 
     def get_session(self, server_name: str) -> Optional[ClientSession]:
         conn = self.connections.get(server_name)

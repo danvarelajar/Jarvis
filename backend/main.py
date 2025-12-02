@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import os
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import mcp.types as types
 
 from .mcp_client import connection_manager, parse_server_route
 from .llm_service import query_llm, parse_llm_response
@@ -28,6 +29,61 @@ class ConnectRequest(BaseModel):
     url: str
     headers: Optional[Dict[str, str]] = None
     transport: str = "sse"
+
+# Sampling Handler
+async def handle_sampling_message(params: types.CreateMessageRequestParams) -> types.CreateMessageResult:
+    """
+    Handles MCP sampling/createMessage requests.
+    """
+    print(f"Received sampling request: {params}")
+    
+    # Convert MCP messages to our LLM service format
+    messages = []
+    
+    # Add system prompt if present
+    if params.systemPrompt:
+        messages.append({"role": "user", "content": f"System Instruction: {params.systemPrompt}"})
+        
+    for msg in params.messages:
+        role = "user" if msg.role == "user" else "assistant"
+        # Handle content (which can be text or image)
+        content_text = ""
+        if hasattr(msg.content, 'type') and msg.content.type == 'text':
+             content_text = msg.content.text
+        elif isinstance(msg.content, str):
+             content_text = msg.content
+        else:
+             # Fallback for complex content
+             content_text = str(msg.content)
+             
+        messages.append({"role": role, "content": content_text})
+        
+    # Query LLM
+    # We don't pass tools here because sampling is usually about generation, 
+    # but if the request includes tools, we could pass them.
+    # The MCP spec says the server can provide tools in the request? 
+    # Actually, the server asks the client to sample. The client (us) has the LLM.
+    # The request might include `includeContext` or `stopSequences`.
+    
+    response_text = await query_llm(messages)
+    
+    # Construct result
+    return types.CreateMessageResult(
+        role="assistant",
+        content=types.TextContent(
+            type="text",
+            text=response_text
+        ),
+        model="gemini-2.5-flash",
+        stopReason="end_turn"
+    )
+
+# Register handler
+@app.on_event("startup")
+async def startup_event():
+    connection_manager.set_sampling_callback(handle_sampling_message)
+    # Reload config to apply callback to connections
+    connection_manager.load_config()
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):
@@ -191,8 +247,9 @@ async def chat(request: ChatRequest):
                         tool_output = str(result)
                 
                 # Truncate if too long to prevent LLM timeout/context overflow
-                # Gemini 2.5 Flash has a huge context window, so we can be very generous.
-                MAX_TOOL_OUTPUT = 1000000 
+                # Truncate if too long to prevent LLM timeout/context overflow
+                # Local models have smaller context windows.
+                MAX_TOOL_OUTPUT = 20000 
                 if len(tool_output) > MAX_TOOL_OUTPUT:
                     tool_output = tool_output[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(tool_output) - MAX_TOOL_OUTPUT} chars omitted). Warning: Some data is missing."
                 
