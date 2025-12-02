@@ -238,12 +238,13 @@ class GlobalConnectionManager:
 # Smart Routing Logic
 def parse_server_route(message: str) -> Optional[str]:
     """
-    Scans for @{server_name} in the message.
+    Scans for @{server_name} or @server_name in the message.
     Returns the server_name if found, else None.
     """
-    match = re.search(r'@\{([a-zA-Z0-9_-]+)\}', message)
+    # Matches @{name} or @name, preceded by start of string or whitespace
+    match = re.search(r'(?:^|\s)@(?:\{([a-zA-Z0-9_-]+)\}|([a-zA-Z0-9_-]+))', message)
     if match:
-        return match.group(1)
+        return match.group(1) or match.group(2)
     return None
 
 # Singleton instance
