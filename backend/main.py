@@ -83,17 +83,20 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
 async def startup_event():
     connection_manager.set_sampling_callback(handle_sampling_message)
     # Reload config to apply callback to connections
-    connection_manager.load_config()
+    await connection_manager.load_config()
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):
-    connection_manager.add_server(request.server_name, request.url, request.headers, request.transport, save=True)
+    await connection_manager.add_server(request.server_name, request.url, request.headers, request.transport, save=True)
     return {"status": "connected", "server": request.server_name}
 
 @app.get("/api/config")
 async def get_config():
     # Construct config from active connections
-    config = {"mcpServers": {}}
+    config = {
+        "mcpServers": {},
+        "geminiApiKey": connection_manager.gemini_api_key
+    }
     for name, conn in connection_manager.connections.items():
         config["mcpServers"][name] = {
             "url": conn.url,
@@ -104,6 +107,7 @@ async def get_config():
 
 class ConfigRequest(BaseModel):
     mcpServers: Dict[str, Dict[str, Any]]
+    geminiApiKey: Optional[str] = None
 
 @app.post("/api/config")
 async def update_config(request: ConfigRequest):
@@ -111,8 +115,12 @@ async def update_config(request: ConfigRequest):
     # For simplicity, we'll just add new ones. 
     # To fully replace, we'd need to stop existing connections, which we haven't implemented.
     # So we'll just add/update.
+    if request.geminiApiKey is not None:
+        connection_manager.gemini_api_key = request.geminiApiKey
+        connection_manager.save_config()
+
     for name, details in request.mcpServers.items():
-        connection_manager.add_server(
+        await connection_manager.add_server(
             name, 
             details["url"], 
             details.get("headers"), 
@@ -126,11 +134,16 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, req: Request):
     user_message = request.messages[-1]["content"]
+    # Try header first, then fallback to persisted key
+    api_key = req.headers.get("x-gemini-api-key") or connection_manager.gemini_api_key
     
     # 1. Smart Routing
-    target_server = parse_server_route(user_message)
+    # 1. Smart Routing (Deprecated for tool calls, but maybe useful for context?)
+    # We'll rely on tool namespacing for explicit routing.
+    # target_server = parse_server_route(user_message)
+    target_server = None
     
     # 2. Tool Discovery
     tools = await connection_manager.list_tools(target_server)
@@ -141,7 +154,7 @@ async def chat(request: ChatRequest):
     
     for _ in range(5):
         # Query LLM
-        response_content = await query_llm(current_messages, tools)
+        response_content = await query_llm(current_messages, tools, api_key=api_key)
         
         # Parse Response
         parsed_response = parse_llm_response(response_content)
@@ -178,15 +191,33 @@ async def chat(request: ChatRequest):
             # Execute tool logic (Routing, Validation, Execution)
             try:
                 # Routing
-                server_to_call = target_server
+                server_to_call = None
+                real_tool_name = tool_call.tool
+                
+                # Check for namespaced tool (server__tool)
+                if "__" in tool_call.tool:
+                    parts = tool_call.tool.split("__", 1)
+                    server_to_call = parts[0]
+                    real_tool_name = parts[1]
+                
+                # Fallback: Try to find server if not namespaced (shouldn't happen with new client logic but good for safety)
                 if not server_to_call:
                     all_tools = await connection_manager.list_tools()
+                    # This is tricky because now all tools in list are namespaced.
+                    # So if the LLM hallucinated a non-namespaced tool, we might fail.
+                    # But let's try to match against the suffix.
+                     
                     sessions = connection_manager.get_all_sessions()
                     for name, session in sessions.items():
                         try:
-                            t_list = await session.list_tools()
-                            if any(t.name == tool_call.tool for t in t_list.tools):
-                                server_to_call = name
+                            # We can't easily check the session without listing tools again or caching better.
+                            # But we have the full list in `tools`.
+                            # Let's check `tools` for a match.
+                            matching_tool = next((t for t in tools if t['name'].endswith(f"__{tool_call.tool}")), None)
+                            if matching_tool:
+                                parts = matching_tool['name'].split("__", 1)
+                                server_to_call = parts[0]
+                                real_tool_name = parts[1]
                                 break
                         except:
                             continue
@@ -219,8 +250,8 @@ async def chat(request: ChatRequest):
                 if not server_to_call:
                     return {"role": "assistant", "content": f"Error: Tool '{tool_call.tool}' not found on any connected server."}
 
-                print(f"Executing tool '{tool_call.tool}' on server '{server_to_call}' with args: {tool_call.arguments}")
-                result = await connection_manager.call_tool(server_to_call, tool_call.tool, tool_call.arguments)
+                print(f"Executing tool '{real_tool_name}' on server '{server_to_call}' with args: {tool_call.arguments}")
+                result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
                 
                     # Extract text content or serialize object
                 tool_output = ""

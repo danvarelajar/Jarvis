@@ -2,7 +2,6 @@ import json
 import json
 from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict, Any
-from .config import Config
 
 class ToolCall(BaseModel):
     tool: str
@@ -38,18 +37,34 @@ STRATEGY FOR SEARCHING/FILTERING:
 CRITICAL: NEVER simulate tool outputs. ALWAYS run the tool.
 If you receive a validation error, fix the arguments and retry.
 
-When you receive a Tool Result, analyze it and present ONLY the relevant information in a structured format. Do not dump raw JSON."""
+When you receive a Tool Result, analyze it and present ONLY the relevant information in a structured format. Do not dump raw JSON.
+
+TOOL NAMESPACING & ROUTING:
+Tools are prefixed with their server name to allow you to select the correct server.
+Format: `server_name__tool_name` (double underscore separator).
+
+Examples:
+- `webdav__list_files`: Lists files on the WebDAV server.
+- `fabricstudio__list_repositories`: Lists repos on the FabricStudio server.
+
+USER INSTRUCTIONS:
+- If the user says `@webdav`, you MUST use tools starting with `webdav__`.
+- If the user says `@fabricstudio`, you MUST use tools starting with `fabricstudio__`.
+- If the user says "save to @webdav", use `webdav__write_file`.
+
+Do not complain that you don't have a tool named `@webdav`. Instead, look for `webdav__...` tools."""
 
 import google.generativeai as genai
 
-async def query_llm(messages: list, tools: list = None) -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None) -> str:
     """
     Queries the Gemini Pro model.
     """
-    if not Config.GEMINI_API_KEY:
-        return "Error: GEMINI_API_KEY is not set."
+    # Use provided key
+    if not api_key:
+        return "Error: GEMINI_API_KEY is not set. Please provide it in the UI."
 
-    genai.configure(api_key=Config.GEMINI_API_KEY)
+    genai.configure(api_key=api_key)
     
     # Gemini uses a different message format. We need to adapt.
     # But for simplicity in this "text-in, text-out" architecture, 

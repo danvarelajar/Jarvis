@@ -12,6 +12,7 @@ function App() {
     const [servers, setServers] = useState([]);
     const [serverConfigJson, setServerConfigJson] = useState('');
     const [isConfigExpanded, setIsConfigExpanded] = useState(false);
+    const [geminiApiKey, setGeminiApiKey] = useState('');
     const messagesEndRef = useRef(null);
 
     const scrollToBottom = () => {
@@ -22,6 +23,11 @@ function App() {
         scrollToBottom();
     }, [messages]);
 
+    // Save API Key to backend (debounced or on blur would be better, but for now simple effect)
+    // Actually, let's just save it when the user clicks a save button or when they connect servers?
+    // The user wants it to be persistent.
+    // Let's fetch it on load.
+
     // Load server config from backend on mount
     useEffect(() => {
         const fetchConfig = async () => {
@@ -29,6 +35,9 @@ function App() {
                 const response = await fetch('/api/config');
                 if (response.ok) {
                     const config = await response.json();
+                    if (config.geminiApiKey) {
+                        setGeminiApiKey(config.geminiApiKey);
+                    }
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
                         setServerConfigJson(JSON.stringify(config, null, 2));
                         // Also update the UI list of connected servers
@@ -53,7 +62,10 @@ function App() {
         try {
             const response = await fetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-gemini-api-key': geminiApiKey
+                },
                 body: JSON.stringify({ messages: [...messages, userMsg] }),
             });
 
@@ -128,6 +140,32 @@ function App() {
                 </div>
 
                 <div className="mt-auto border-t border-gray-700 pt-4">
+                    <div className="mb-4">
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">Gemini API Key</h3>
+                        <input
+                            type="password"
+                            value={geminiApiKey}
+                            onChange={(e) => setGeminiApiKey(e.target.value)}
+                            onBlur={async () => {
+                                // Save on blur
+                                try {
+                                    await fetch('/api/config', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            mcpServers: {}, // Don't overwrite servers
+                                            geminiApiKey: geminiApiKey
+                                        }),
+                                    });
+                                } catch (error) {
+                                    console.error("Failed to save API key:", error);
+                                }
+                            }}
+                            placeholder="Enter API Key..."
+                            className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
+                        />
+                    </div>
+
                     <button
                         onClick={() => setIsConfigExpanded(!isConfigExpanded)}
                         className="flex items-center gap-2 w-full text-xs uppercase text-gray-500 font-semibold mb-2 hover:text-gray-300 transition-colors"
@@ -150,7 +188,7 @@ function App() {
                                 className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs text-white flex items-center justify-center gap-2"
                             >
                                 <Terminal size={14} />
-                                Connect All
+                                Connect / Refresh All
                             </button>
                         </div>
                     )}

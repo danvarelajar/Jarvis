@@ -25,7 +25,6 @@ COPY backend/ backend/
 COPY --from=build /app/frontend/dist /app/frontend/dist
 
 # Environment variables
-ENV OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 # Create data directory for persistence
 RUN mkdir -p /app/data

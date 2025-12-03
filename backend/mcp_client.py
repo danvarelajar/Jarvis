@@ -23,7 +23,7 @@ class PersistentConnection:
         self.transport = transport
         self.sampling_callback = sampling_callback
         self.session: Optional[ClientSession] = None
-        self._exit_stack = None
+        self._task: Optional[asyncio.Task] = None
         
         # Caching
         self.tools_cache = None
@@ -52,6 +52,9 @@ class PersistentConnection:
                             print(f"Connected to {self.server_name} via HTTP")
                             await session.initialize()
                             
+                            # Prefetch tools to populate cache
+                            asyncio.create_task(self.get_tools())
+                            
                             # Reset backoff on successful connection
                             backoff_delay = 1
                             
@@ -60,11 +63,35 @@ class PersistentConnection:
                 else:
                     # SSE Transport
                     # Set timeout to None to prevent read timeouts on long-lived connections
-                    async with sse_client(self.url, headers=self.headers, timeout=None) as (read, write):
+                    
+                    import logging
+                    import sys
+                    
+                    async def log_response_body(response):
+                        print(f"HOOK CALLED for {response.url}", flush=True)
+                        if response.status_code >= 400:
+                            body = await response.aread()
+                            print(f"Response Body for {response.url}: {body}", flush=True)
+                            logging.error(f"Response Body for {response.url}: {body}")
+
+                    def custom_client_factory(headers, auth, timeout):
+                        # Enforce infinite timeout for SSE connections to prevent read timeouts
+                        # httpx defaults to 5s if not specified, and sometimes timeout=None isn't enough depending on context
+                        return httpx.AsyncClient(
+                            headers=headers, 
+                            auth=auth, 
+                            timeout=httpx.Timeout(None, connect=5.0),
+                            event_hooks={'response': [log_response_body]}
+                        )
+
+                    async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
                             print(f"Connected to {self.server_name} via SSE")
                             await session.initialize()
+                            
+                            # Prefetch tools to populate cache
+                            asyncio.create_task(self.get_tools())
                             
                             # Reset backoff on successful connection
                             backoff_delay = 1
@@ -88,6 +115,16 @@ class PersistentConnection:
                 # Increase backoff
                 backoff_delay = min(backoff_delay * 2, max_backoff)
 
+    async def stop(self):
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+            print(f"Stopped connection to {self.server_name}")
+
     async def get_tools(self):
         if not self.session:
             return []
@@ -98,10 +135,18 @@ class PersistentConnection:
             
         try:
             result = await self.session.list_tools()
-            self.tools_cache = [t.model_dump() for t in result.tools]
+            self.tools_cache = []
+            for t in result.tools:
+                tool_dump = t.model_dump()
+                # Prefix tool name with server name
+                tool_dump['name'] = f"{self.server_name}__{t.name}"
+                self.tools_cache.append(tool_dump)
+                
             self.tools_cache_timestamp = current_time
             return self.tools_cache
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Error listing tools for {self.server_name}: {e}")
             return []
 
@@ -143,29 +188,26 @@ import json
 import os
 
 CONFIG_FILE = "/app/data/mcp_config.json"
+SECRETS_FILE = "/app/data/secrets.json"
 
 class GlobalConnectionManager:
     def __init__(self):
         self.connections: Dict[str, PersistentConnection] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
-        # Defer loading config until we have the callback, or just load it and update later?
-        # Better to load it, but we can't start connections without the callback if we want them to have it.
-        # So we'll load config but not start connections yet? 
-        # Or we can just set the callback later and restart connections?
-        # For simplicity, let's allow setting the callback and then loading/reloading.
+        self.gemini_api_key: Optional[str] = None
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
         self.sampling_callback = callback
         # If we already have connections, we might need to restart them to pick up the callback.
         # But usually this is called at startup before adding servers.
 
-    def load_config(self):
+    async def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
                     for name, details in config.get("mcpServers", {}).items():
-                        self.add_server(
+                        await self.add_server(
                             name, 
                             details["url"], 
                             details.get("headers"), 
@@ -176,7 +218,18 @@ class GlobalConnectionManager:
             except Exception as e:
                 print(f"Failed to load config: {e}")
 
+        # Load secrets
+        if os.path.exists(SECRETS_FILE):
+            try:
+                with open(SECRETS_FILE, 'r') as f:
+                    secrets = json.load(f)
+                    self.gemini_api_key = secrets.get("geminiApiKey")
+                print(f"Loaded secrets from {SECRETS_FILE}")
+            except Exception as e:
+                print(f"Failed to load secrets: {e}")
+
     def save_config(self):
+        # Save MCP Servers
         config = {"mcpServers": {}}
         for name, conn in self.connections.items():
             config["mcpServers"][name] = {
@@ -195,18 +248,24 @@ class GlobalConnectionManager:
         except Exception as e:
             print(f"Failed to save config: {e}")
 
-    def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
+        # Save Secrets
+        secrets = {"geminiApiKey": self.gemini_api_key}
+        try:
+            with open(SECRETS_FILE, 'w') as f:
+                json.dump(secrets, f, indent=2)
+            print(f"Saved secrets to {SECRETS_FILE}")
+        except Exception as e:
+            print(f"Failed to save secrets: {e}")
+
+    async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
         # Stop existing if any
         if server_name in self.connections:
-            # Ideally we should stop it, but we don't have a stop method exposed easily yet.
-            # The loop in start() runs forever. We'd need to cancel the task.
-            # For now, we'll just overwrite it, leaving the old one potentially running (leak).
-            # TODO: Fix connection cleanup.
-            pass
+            print(f"Stopping existing connection for {server_name}...")
+            await self.connections[server_name].stop()
 
         connection = PersistentConnection(server_name, url, headers, transport, sampling_callback=self.sampling_callback)
         self.connections[server_name] = connection
-        asyncio.create_task(connection.start())
+        connection._task = asyncio.create_task(connection.start())
         if save:
             self.save_config()
 
