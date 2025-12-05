@@ -114,8 +114,17 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None) -> 
     
     chat = model.start_chat(history=gemini_history)
     
+    # Configure safety settings to block nothing for the demo
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+    
     try:
-        response = await chat.send_message_async(prompt)
+        response = await chat.send_message_async(prompt, safety_settings=safety_settings)
         return response.text
     except Exception as e:
         print(f"LLM Error Details: {repr(e)}")
