@@ -152,7 +152,7 @@ async def chat(request: ChatRequest, req: Request):
     local_tools = [
         {
             "name": "local_filesystem__read_file",
-            "description": "Reads a file from the local Jarvis filesystem. Use this to read internal configuration or secrets.",
+            "description": "Directly reads a file from Jarvis's local filesystem. Use this whenever you need to access a specific file path (like /app/data/...) that other tools mention but cannot access.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

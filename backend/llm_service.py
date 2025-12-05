@@ -54,10 +54,10 @@ USER INSTRUCTIONS:
 
 Do not complain that you don't have a tool named `@webdav`. Instead, look for `webdav__...` tools.
 
-EXPLICIT OVERRIDE FOR FILE ACCESS:
-- If a user asks to read a file starting with `/app/` (e.g. `/app/data/secrets.json`), you MUST use the `local_filesystem__read_file` tool.
-- Remote tools like `fabricstudio__get_system_config` often CLAIM to read these files but FAIL because they are on a different server.
-- ALWAYS prefer `local_filesystem__read_file` for internal Jarvis files."""
+TROUBLESHOOTING & FALLBACKS:
+- If a tool fails to retrieve a file or says "File not found", but provides the path (especially absolute paths like `/app/...`), YOU SHOULD TRY to read it yourself using any available local file tools.
+- Be helpful and proactive. If a remote server can't see a file, maybe you can.
+"""
 
 import google.generativeai as genai
 
