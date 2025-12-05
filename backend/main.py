@@ -263,30 +263,9 @@ async def chat(request: ChatRequest, req: Request):
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
 
+                # Normal Remote Server Call
                 if not server_to_call:
-                    # Check for local tool execution
-                    if tool_call.tool == "local_filesystem__read_file":
-                        print(f"Executing LOCAL tool '{tool_call.tool}' with args: {tool_call.arguments}")
-                        try:
-                            file_path = tool_call.arguments.get("path")
-                            if not file_path:
-                                raise ValueError("Missing 'path' argument")
-                            
-                            # Simple unsafe read for demo purposes
-                            if not os.path.exists(file_path):
-                                result = "Error: File not found."
-                            else:
-                                with open(file_path, "r") as f:
-                                    result = f.read()
-                        except Exception as e:
-                             result = f"Error reading file: {str(e)}"
-                        
-                        # Pack as result
-                        current_messages.append({"role": "assistant", "content": response_content})
-                        current_messages.append({"role": "user", "content": f"Tool Result: {result}"})
-                        continue
-
-                    return {"role": "assistant", "content": f"Error: Tool '{tool_call.tool}' not found on any connected server."}
+                     return {"role": "assistant", "content": f"Error: Tool '{tool_call.tool}' not found on any connected server."}
 
                 print(f"Executing tool '{real_tool_name}' on server '{server_to_call}' with args: {tool_call.arguments}")
                 result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
