@@ -100,8 +100,32 @@ class PersistentConnection:
                                 await asyncio.sleep(1)
             except Exception as e:
                 import traceback
-                print(f"Connection error for {self.server_name}: {e}")
-                traceback.print_exc() 
+                import sys
+
+                error_msg = str(e)
+                is_connection_error = False
+
+                # Handle Python 3.11+ ExceptionGroup
+                if sys.version_info >= (3, 11) and isinstance(e, BaseExceptionGroup):
+                    # Try to find the interesting exception
+                    exceptions = e.exceptions
+                    if len(exceptions) > 0:
+                        inner = exceptions[0]
+                        # Dig deeper if it's another group or httpcore/httpx wrapper
+                        # For now, just getting the string of the inner exception is often enough
+                        error_msg = str(inner)
+                        # Check for common connection errors string sigs or types if imported
+                        if "ConnectError" in type(inner).__name__ or "os error" in str(inner).lower():
+                           is_connection_error = True
+
+                if "ConnectError" in type(e).__name__:
+                    is_connection_error = True
+
+                if is_connection_error or "connection refused" in error_msg.lower() or "connect call failed" in error_msg.lower():
+                     print(f"Connection error for {self.server_name}: {error_msg}")
+                else:
+                     print(f"Connection error for {self.server_name}: {e}")
+                     # traceback.print_exc() # Keep disabled for cleaner logs unless debugging 
                 self.session = None
                 # Clear cache on disconnection
                 self.tools_cache = None
