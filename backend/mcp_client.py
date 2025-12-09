@@ -187,10 +187,8 @@ class PersistentConnection:
 import json
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-CONFIG_FILE = os.path.join(DATA_DIR, "mcp_config.json")
-SECRETS_FILE = os.path.join(DATA_DIR, "secrets.json")
+CONFIG_FILE = "/data/mcp_config.json"
+SECRETS_FILE = "/data/secrets.json"
 
 class GlobalConnectionManager:
     def __init__(self):
