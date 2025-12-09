@@ -195,6 +195,7 @@ class GlobalConnectionManager:
         self.connections: Dict[str, PersistentConnection] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
         self.gemini_api_key: Optional[str] = None
+        self.last_config_mtime = 0
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
         self.sampling_callback = callback
@@ -204,9 +205,23 @@ class GlobalConnectionManager:
     async def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
+                current_mtime = os.path.getmtime(CONFIG_FILE)
+                # If mtime hasn't changed significantly (and we have loaded before), skip 
+                # strictly speaking, load_config is called on startup too.
+                
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
+                    
+                    # 1. Identify current active servers
+                    active_servers = set(self.connections.keys())
+                    
+                    # 2. Iterate through new config
+                    new_servers = set()
                     for name, details in config.get("mcpServers", {}).items():
+                        new_servers.add(name)
+                        
+                        # Check if update needed (simplest is to just re-add, which restarts)
+                        # or check if it's new
                         await self.add_server(
                             name, 
                             details["url"], 
@@ -214,6 +229,16 @@ class GlobalConnectionManager:
                             transport=details.get("transport", "sse"),
                             save=False
                         )
+                        
+                    # 3. Remove servers that are no longer in config
+                    to_remove = active_servers - new_servers
+                    for name in to_remove:
+                        print(f"Removing server {name} as it was removed from config")
+                        if name in self.connections:
+                            await self.connections[name].stop()
+                            del self.connections[name]
+                            
+                self.last_config_mtime = current_mtime
                 print(f"Loaded config from {CONFIG_FILE}")
             except Exception as e:
                 print(f"Failed to load config: {e}")
@@ -227,6 +252,19 @@ class GlobalConnectionManager:
                 print(f"Loaded secrets from {SECRETS_FILE}")
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
+
+    async def watch_config(self):
+        print(f"Starting config watcher for {CONFIG_FILE}")
+        while True:
+            await asyncio.sleep(2) # Check every 2 seconds
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    mtime = os.path.getmtime(CONFIG_FILE)
+                    if mtime > self.last_config_mtime:
+                        print("Config file changed, reloading...")
+                        await self.load_config()
+                except Exception as e:
+                    print(f"Error watching config: {e}")
 
     def save_config(self):
         # Save MCP Servers

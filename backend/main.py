@@ -6,6 +6,7 @@ import os
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import mcp.types as types
+import asyncio
 
 from .mcp_client import connection_manager, parse_server_route
 from .llm_service import query_llm, parse_llm_response
@@ -84,6 +85,8 @@ async def startup_event():
     connection_manager.set_sampling_callback(handle_sampling_message)
     # Reload config to apply callback to connections
     await connection_manager.load_config()
+    # Start config watcher
+    asyncio.create_task(connection_manager.watch_config())
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):
