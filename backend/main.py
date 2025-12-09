@@ -95,6 +95,9 @@ async def connect_server(request: ConnectRequest):
 
 @app.get("/api/config")
 async def get_config():
+    # Reload config from filesystem on every request to ensure freshness
+    await connection_manager.load_config()
+    
     # Construct config from active connections
     config = {
         "mcpServers": {},
