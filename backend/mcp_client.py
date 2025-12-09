@@ -203,17 +203,19 @@ class GlobalConnectionManager:
         # But usually this is called at startup before adding servers.
 
     async def load_config(self):
+        print(f"[DEBUG] load_config called. Checking file: {CONFIG_FILE}")
         if os.path.exists(CONFIG_FILE):
             try:
+                print(f"[DEBUG] File exists at {CONFIG_FILE}")
                 current_mtime = os.path.getmtime(CONFIG_FILE)
-                # If mtime hasn't changed significantly (and we have loaded before), skip 
-                # strictly speaking, load_config is called on startup too.
                 
                 with open(CONFIG_FILE, 'r') as f:
                     content = f.read()
-                    
+                
+                print(f"[DEBUG] Read {len(content)} bytes from {CONFIG_FILE}")
+                print(f"[DEBUG] Raw content snippet: {content[:100]}...")
+
                 # Remove comments (simple approach: lines starting with // or #)
-                # A more robust regex approach for JSONC might be better, but this handles the user's case.
                 lines = content.splitlines()
                 clean_lines = []
                 for line in lines:
@@ -224,7 +226,8 @@ class GlobalConnectionManager:
                 
                 clean_content = "\n".join(clean_lines)
                 config = json.loads(clean_content)
-                    
+                print(f"[DEBUG] JSON Parsed successfully. Keys: {list(config.keys())}")
+                
                 # 1. Identify current active servers
                 active_servers = set(self.connections.keys())
                 
@@ -232,9 +235,6 @@ class GlobalConnectionManager:
                 new_servers = set()
                 for name, details in config.get("mcpServers", {}).items():
                     new_servers.add(name)
-                    
-                    # Check if update needed (simplest is to just re-add, which restarts)
-                    # or check if it's new
                     await self.add_server(
                         name, 
                         details["url"], 
@@ -254,7 +254,11 @@ class GlobalConnectionManager:
                 self.last_config_mtime = current_mtime
                 print(f"Loaded config from {CONFIG_FILE}")
             except Exception as e:
-                print(f"Failed to load config: {e}")
+                print(f"[ERROR] Failed to load config: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[DEBUG] File NOT found at {CONFIG_FILE}")
 
         # Load secrets
         if os.path.exists(SECRETS_FILE):
