@@ -263,6 +263,22 @@ async def chat(request: ChatRequest, req: Request):
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
 
+                if not server_to_call:
+                    if tool_call.tool == "execute_shell_command":
+                        cmd = tool_call.arguments.get("command")
+                        print(f"Executing SHELL command: {cmd}")
+                        try:
+                            import subprocess
+                            process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+                            result = process.stdout + process.stderr
+                        except Exception as e:
+                            result = f"Error executing command: {str(e)}"
+                        
+                        current_messages.append({"role": "assistant", "content": response_content})
+                        current_messages.append({"role": "user", "content": f"Tool Result: {result}"})
+                        continue
+
+                    return {"role": "assistant", "content": f"Error: Tool '{tool_call.tool}' not found on any connected server."}
 
                 print(f"Executing tool '{real_tool_name}' on server '{server_to_call}' with args: {tool_call.arguments}")
                 result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)

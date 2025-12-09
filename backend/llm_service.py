@@ -119,7 +119,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None) -> 
     
     chat = model.start_chat(history=gemini_history)
     
-    # Configure safety settings to block nothing for the demo
+    # Configure safety settings
     from google.generativeai.types import HarmCategory, HarmBlockThreshold
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
