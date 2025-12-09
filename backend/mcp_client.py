@@ -100,9 +100,8 @@ class PersistentConnection:
                                 await asyncio.sleep(1)
             except Exception as e:
                 import traceback
-                # Only print full traceback for unexpected errors, keep logs cleaner for connection issues
-                # traceback.print_exc() 
                 print(f"Connection error for {self.server_name}: {e}")
+                traceback.print_exc() 
                 self.session = None
                 # Clear cache on disconnection
                 self.tools_cache = None
