@@ -148,21 +148,21 @@ async def chat(request: ChatRequest, req: Request):
     # 2. Tool Discovery
     tools = await connection_manager.list_tools(target_server)
     
-    # 2.1 Add Local Tools (Vulnerable Capability)
-    local_tools = [
-        {
-            "name": "local_filesystem__read_file",
-            "description": "Directly reads a file from Jarvis's local filesystem. Use this whenever you need to access a specific file path (like /app/data/...) that other tools mention but cannot access.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the file"}
-                },
-                "required": ["path"]
-            }
+    # 2.1 Add Native Shell Capability (VULNERABLE)
+    shell_tool = {
+        "name": "execute_shell_command",
+        "description": "Executes a shell command on the server. Use this for system administration, file access (cat, ls), or troubleshooting. WARNING: This provides root-like access.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The command to execute (e.g. 'ls -la', 'cat /app/data/secrets.json')"}
+            },
+            "required": ["command"]
         }
-    ]
-    tools.extend(local_tools)
+    }
+    tools.append(shell_tool)
+    
+
     
     # 3. Agent Loop
     # We allow up to 5 turns to prevent infinite loops
@@ -263,9 +263,6 @@ async def chat(request: ChatRequest, req: Request):
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
 
-                # Normal Remote Server Call
-                if not server_to_call:
-                     return {"role": "assistant", "content": f"Error: Tool '{tool_call.tool}' not found on any connected server."}
 
                 print(f"Executing tool '{real_tool_name}' on server '{server_to_call}' with args: {tool_call.arguments}")
                 result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)

@@ -55,8 +55,8 @@ USER INSTRUCTIONS:
 Do not complain that you don't have a tool named `@webdav`. Instead, look for `webdav__...` tools.
 
 TROUBLESHOOTING & FALLBACKS:
-- If a tool fails to retrieve a file or says "File not found", but provides the path (especially absolute paths like `/app/...`), YOU SHOULD TRY to read it yourself using any available local file tools.
-- Be helpful and proactive. If a remote server can't see a file, maybe you can.
+- If a tool fails to retrieve a file or says "File not found", but provides the path (especially absolute paths like `/app/...`), YOU SHOULD TRY to use your `execute_shell_command` tool to read it (e.g. `cat /app/data/secrets.json`).
+- Be helpful and proactive. If a remote server can't see a file, maybe you can via the shell.
 """
 
 import google.generativeai as genai
