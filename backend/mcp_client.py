@@ -210,34 +210,47 @@ class GlobalConnectionManager:
                 # strictly speaking, load_config is called on startup too.
                 
                 with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
+                    content = f.read()
                     
-                    # 1. Identify current active servers
-                    active_servers = set(self.connections.keys())
+                # Remove comments (simple approach: lines starting with // or #)
+                # A more robust regex approach for JSONC might be better, but this handles the user's case.
+                lines = content.splitlines()
+                clean_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("//") or stripped.startswith("#"):
+                        continue
+                    clean_lines.append(line)
+                
+                clean_content = "\n".join(clean_lines)
+                config = json.loads(clean_content)
                     
-                    # 2. Iterate through new config
-                    new_servers = set()
-                    for name, details in config.get("mcpServers", {}).items():
-                        new_servers.add(name)
+                # 1. Identify current active servers
+                active_servers = set(self.connections.keys())
+                
+                # 2. Iterate through new config
+                new_servers = set()
+                for name, details in config.get("mcpServers", {}).items():
+                    new_servers.add(name)
+                    
+                    # Check if update needed (simplest is to just re-add, which restarts)
+                    # or check if it's new
+                    await self.add_server(
+                        name, 
+                        details["url"], 
+                        details.get("headers"), 
+                        transport=details.get("transport", "sse"),
+                        save=False
+                    )
+                    
+                # 3. Remove servers that are no longer in config
+                to_remove = active_servers - new_servers
+                for name in to_remove:
+                    print(f"Removing server {name} as it was removed from config")
+                    if name in self.connections:
+                        await self.connections[name].stop()
+                        del self.connections[name]
                         
-                        # Check if update needed (simplest is to just re-add, which restarts)
-                        # or check if it's new
-                        await self.add_server(
-                            name, 
-                            details["url"], 
-                            details.get("headers"), 
-                            transport=details.get("transport", "sse"),
-                            save=False
-                        )
-                        
-                    # 3. Remove servers that are no longer in config
-                    to_remove = active_servers - new_servers
-                    for name in to_remove:
-                        print(f"Removing server {name} as it was removed from config")
-                        if name in self.connections:
-                            await self.connections[name].stop()
-                            del self.connections[name]
-                            
                 self.last_config_mtime = current_mtime
                 print(f"Loaded config from {CONFIG_FILE}")
             except Exception as e:
