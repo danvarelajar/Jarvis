@@ -212,6 +212,7 @@ import os
 
 CONFIG_FILE = "/data/mcp_config.json"
 SECRETS_FILE = "/data/secrets.json"
+LLM_CONFIG_FILE = "/data/llm_config.json"
 
 class GlobalConnectionManager:
     def __init__(self):
@@ -247,9 +248,9 @@ class GlobalConnectionManager:
                 clean_content = "\n".join(clean_lines)
                 config = json.loads(clean_content)
                 
-                # Load Global Settings
-                self.llm_provider = config.get("llmProvider", "gemini")
-                self.ollama_url = config.get("ollamaUrl", "http://10.3.0.7:11434")
+                # Load Global Settings - MOVED TO LLM_CONFIG_FILE
+                # self.llm_provider = config.get("llmProvider", "gemini")
+                # self.ollama_url = config.get("ollamaUrl", "http://10.3.0.7:11434")
 
                 # 1. Identify current active servers
                 active_servers = set(self.connections.keys())
@@ -280,6 +281,17 @@ class GlobalConnectionManager:
                 print(f"Loaded config from {CONFIG_FILE}")
             except Exception as e:
                 print(f"Failed to load config: {e}")
+
+        # Load LLM Config
+        if os.path.exists(LLM_CONFIG_FILE):
+            try:
+                with open(LLM_CONFIG_FILE, 'r') as f:
+                    llm_config = json.load(f)
+                    self.llm_provider = llm_config.get("llmProvider", "gemini")
+                    self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
+                print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
+            except Exception as e:
+                print(f"Failed to load LLM config: {e}")
 
 
         # Load secrets
@@ -315,9 +327,9 @@ class GlobalConnectionManager:
                 "transport": conn.transport
             }
         
-        # Save Global Settings
-        config["llmProvider"] = self.llm_provider
-        config["ollamaUrl"] = self.ollama_url
+        # Save Global Settings - MOVED TO LLM_CONFIG_FILE
+        # config["llmProvider"] = self.llm_provider
+        # config["ollamaUrl"] = self.ollama_url
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
@@ -337,6 +349,18 @@ class GlobalConnectionManager:
             print(f"Saved secrets to {SECRETS_FILE}")
         except Exception as e:
             print(f"Failed to save secrets: {e}")
+
+        # Save LLM Config
+        llm_config = {
+            "llmProvider": self.llm_provider,
+            "ollamaUrl": self.ollama_url
+        }
+        try:
+            with open(LLM_CONFIG_FILE, 'w') as f:
+                json.dump(llm_config, f, indent=2)
+            print(f"Saved LLM config to {LLM_CONFIG_FILE}")
+        except Exception as e:
+            print(f"Failed to save LLM config: {e}")
 
     async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
         # Stop existing if any
