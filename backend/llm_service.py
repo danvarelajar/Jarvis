@@ -75,12 +75,17 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str) -> st
     }
     
     try:
-        timeout = httpx.Timeout(60.0, connect=5.0)
+        # Increase timeout to 300s (5 mins) because loading a model for the first time can be slow
+        timeout = httpx.Timeout(300.0, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(api_endpoint, json=payload)
             response.raise_for_status()
             result = response.json()
             return result["message"]["content"]
+    except httpx.HTTPStatusError as e:
+        error_body = e.response.text
+        print(f"Ollama HTTP Error: {error_body}")
+        return f"Ollama Error: {error_body}"
     except Exception as e:
         print(f"Ollama Error Details: {repr(e)}")
         return f"Error communicating with Ollama at {model_url}: {str(e)}"
