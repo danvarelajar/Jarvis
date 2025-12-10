@@ -183,10 +183,18 @@ async def chat(request: ChatRequest, req: Request):
 
     
     # 3. Agent Loop
-    # We allow up to 5 turns to prevent infinite loops
+    # We allow up to 20 turns to prevent infinite loops
     current_messages = request.messages.copy()
     
+    import asyncio
+    
     for turn_index in range(20):
+        # PACING: Wait 2 seconds between turns to respect Gemini Free Tier limits (20 RPM)
+        # This prevents a single complex task from exhausting the minute's quota in < 10 seconds.
+        if turn_index > 0:
+             print(f"PACING: Sleeping 2s to respect rate limits...")
+             await asyncio.sleep(2)
+
         print(f"\n--- [Turn {turn_index + 1}] Processing ---")
         
         # Query LLM
