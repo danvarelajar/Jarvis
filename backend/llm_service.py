@@ -57,7 +57,18 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str) -> st
             api_endpoint += "/api/chat"
             
     # Prep messages
-    ollama_messages = [{"role": "system", "content": system_prompt}]
+    # Custom System Prompt for Ollama to force tool usage
+    # We append the tools here instead of assuming they are in the passed system_prompt
+    # This allows us to format them specifically for the local model
+    
+    final_system_prompt = system_prompt
+    if "Available Tools" not in final_system_prompt:
+         # Need to be able to pass tools to formatting
+         pass 
+
+    print(f"DEBUG: Ollama System Prompt Length: {len(final_system_prompt)}")
+    
+    ollama_messages = [{"role": "system", "content": final_system_prompt}]
     
     for msg in messages:
         # Map roles if necessary, but "user" and "assistant" are standard
@@ -102,8 +113,15 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         current_system_prompt += f"\n\nAvailable Tools:\n{tool_descriptions}"
 
     # Dispatch based on provider
+    # Dispatch based on provider
     if provider == "ollama":
-        return await query_ollama(messages, current_system_prompt, model_url)
+        # For Ollama, we want to construct the prompt differently to be very explicit
+        ollama_system_prompt = SYSTEM_PROMPT
+        if tools:
+            tool_descriptions = json.dumps(tools, indent=2)
+            ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+            
+        return await query_ollama(messages, ollama_system_prompt, model_url)
 
     # Default to Gemini
     # Use provided key
