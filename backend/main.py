@@ -146,10 +146,10 @@ async def chat(request: ChatRequest, req: Request):
     api_key = req.headers.get("x-gemini-api-key") or connection_manager.gemini_api_key
     
     # 1. Smart Routing
-    # 1. Smart Routing (Deprecated for tool calls, but maybe useful for context?)
-    # We'll rely on tool namespacing for explicit routing.
-    # target_server = parse_server_route(user_message)
-    target_server = None
+    # Check for @server_name syntax to filter tools
+    target_server = parse_server_route(user_message)
+    if target_server:
+        print(f"DEBUG: Smart Routing detected target server: '{target_server}'")
     
     # 2. Tool Discovery
     tools = await connection_manager.list_tools(target_server)
@@ -174,7 +174,9 @@ async def chat(request: ChatRequest, req: Request):
     # We allow up to 5 turns to prevent infinite loops
     current_messages = request.messages.copy()
     
-    for _ in range(5):
+    for turn_index in range(20):
+        print(f"\n--- [Turn {turn_index + 1}] Processing ---")
+        
         # Query LLM
         response_content = await query_llm(current_messages, tools, api_key=api_key)
         
@@ -182,6 +184,7 @@ async def chat(request: ChatRequest, req: Request):
         parsed_response = parse_llm_response(response_content)
         
         if parsed_response["type"] == "text":
+            print(f"[Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
             return {"role": "assistant", "content": parsed_response["content"]}
             
         elif parsed_response["type"] == "error":
@@ -207,6 +210,8 @@ async def chat(request: ChatRequest, req: Request):
                 current_messages.append({"role": "assistant", "content": response_content})
                 current_messages.append({"role": "user", "content": error_msg})
                 continue
+            
+            print(f"[Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
             
             tool_call_history.add(tool_signature)
             
@@ -321,6 +326,10 @@ async def chat(request: ChatRequest, req: Request):
                     tool_output = tool_output[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(tool_output) - MAX_TOOL_OUTPUT} chars omitted). Warning: Some data is missing."
                 
                 # Feed result back to LLM
+                print(f"[Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
+                if len(tool_output) < 200:
+                    print(f"[Turn {turn_index + 1}] Result Preview: {tool_output}")
+                
                 current_messages.append({"role": "assistant", "content": response_content})
                 current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
                 
@@ -329,7 +338,21 @@ async def chat(request: ChatRequest, req: Request):
             except Exception as e:
                 return {"role": "assistant", "content": f"Error executing tool: {str(e)}"}
     
-    return {"role": "assistant", "content": "Error: Maximum agent turns reached."}
+    # Construct a debug summary to help the user understand why it looped
+    debug_summary = "Error: Maximum agent turns reached (20). check backend logs for more details.\n\nLoop Trace (Last 3 Turns):\n"
+    
+    # Get the last few messages to show what the agent was trying to do
+    # We filter for assistant tool calls or user tool results to be most helpful
+    recent_history = current_messages[-6:] 
+    for msg in recent_history:
+        role = msg['role'].upper()
+        content = msg['content']
+        # Truncate content for readability
+        if len(content) > 300:
+            content = content[:300] + "... (truncated)"
+        debug_summary += f"\n[{role}]\n{content}\n"
+
+    return {"role": "assistant", "content": debug_summary}
 
 # Mount static files
 # We need to ensure the directory exists, even if empty, to avoid startup errors
