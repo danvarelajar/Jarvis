@@ -176,8 +176,23 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
     
+    # Debug Logging
+    print(f"\n--- [Gemini Debug] Request ---")
+    print(f"Tools Count: {len(tools) if tools else 0}")
+    if tools:
+        print(f"Tools Size (approx chars): {len(tool_descriptions)}")
+    
+    print(f"Messages Count: {len(gemini_history) + 1}") # +1 for prompt
+    print(f"Prompt (Last Message) Size: {len(prompt)}")
+    
+    # Dump full history object for inspection if needed (careful with size)
+    # print(f"Full Gemini History: {gemini_history}")
+    
     try:
+        print("Sending request to Gemini...")
         response = await chat.send_message_async(prompt, safety_settings=safety_settings)
+        print("Response received.")
+        print(f"Response Tokens (approx chars): {len(response.text)}")
         return response.text
     except Exception as e:
         print(f"LLM Error Details: {repr(e)}")
