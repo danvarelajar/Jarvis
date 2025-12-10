@@ -37,11 +37,70 @@ Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.
 """
 
 import google.generativeai as genai
+import httpx
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None) -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str) -> str:
     """
-    Queries the Gemini Pro model.
+    Queries a local Ollama instance.
     """
+    if not model_url:
+        return "Error: Ollama URL is not set."
+        
+    # Ensure URL ends with /api/chat
+    # If the user provides "http://10.3.0.7:11434", we append "/api/chat"
+    # If they include it, we respect it.
+    api_endpoint = model_url
+    if not api_endpoint.endswith("/api/chat"):
+        if api_endpoint.endswith("/"):
+            api_endpoint += "api/chat"
+        else:
+            api_endpoint += "/api/chat"
+            
+    # Prep messages
+    ollama_messages = [{"role": "system", "content": system_prompt}]
+    
+    for msg in messages:
+        # Map roles if necessary, but "user" and "assistant" are standard
+        role = msg["role"]
+        if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
+        ollama_messages.append({"role": role, "content": msg["content"]})
+        
+    payload = {
+        "model": "mcp-tool-executor", # User specified model name
+        "messages": ollama_messages,
+        "stream": False,
+        "options": {
+            "temperature": 0 # Low temp for tool execution
+        }
+    }
+    
+    try:
+        timeout = httpx.Timeout(60.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_endpoint, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return result["message"]["content"]
+    except Exception as e:
+        print(f"Ollama Error Details: {repr(e)}")
+        return f"Error communicating with Ollama at {model_url}: {str(e)}"
+
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "gemini", model_url: str = None) -> str:
+    """
+    Queries the selected LLM provider.
+    """
+    
+    # Construct the full prompt including system instructions
+    current_system_prompt = SYSTEM_PROMPT
+    if tools:
+        tool_descriptions = json.dumps(tools, indent=2)
+        current_system_prompt += f"\n\nAvailable Tools:\n{tool_descriptions}"
+
+    # Dispatch based on provider
+    if provider == "ollama":
+        return await query_ollama(messages, current_system_prompt, model_url)
+
+    # Default to Gemini
     # Use provided key
     if not api_key:
         return "Error: GEMINI_API_KEY is not set. Please provide it in the UI."
@@ -52,17 +111,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None) -> 
     # But for simplicity in this "text-in, text-out" architecture, 
     # we can just construct a prompt or use the chat session.
     
-    # Construct the full prompt including system instructions
-    # Gemini supports system instructions in the model config, but prepending is safer for now.
-    
-    current_system_prompt = SYSTEM_PROMPT
-    if tools:
-        tool_descriptions = json.dumps(tools, indent=2)
-        current_system_prompt += f"\n\nAvailable Tools:\n{tool_descriptions}"
-
-    # Convert messages to Gemini format or just a single string for simplicity
-    # Since we are managing the loop manually, we can just feed the history as text
-    # or use the chat object. Let's use the chat object for better context handling.
     
     model = genai.GenerativeModel('gemini-2.5-flash')
     

@@ -218,6 +218,8 @@ class GlobalConnectionManager:
         self.connections: Dict[str, PersistentConnection] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
         self.gemini_api_key: Optional[str] = None
+        self.llm_provider: str = "gemini" # gemini or ollama
+        self.ollama_url: str = "http://10.3.0.7:11434"
         self.last_config_mtime = 0
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
@@ -245,6 +247,10 @@ class GlobalConnectionManager:
                 clean_content = "\n".join(clean_lines)
                 config = json.loads(clean_content)
                 
+                # Load Global Settings
+                self.llm_provider = config.get("llmProvider", "gemini")
+                self.ollama_url = config.get("ollamaUrl", "http://10.3.0.7:11434")
+
                 # 1. Identify current active servers
                 active_servers = set(self.connections.keys())
                 
@@ -308,6 +314,10 @@ class GlobalConnectionManager:
                 "headers": conn.headers,
                 "transport": conn.transport
             }
+        
+        # Save Global Settings
+        config["llmProvider"] = self.llm_provider
+        config["ollamaUrl"] = self.ollama_url
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)

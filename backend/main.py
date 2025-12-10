@@ -101,7 +101,9 @@ async def get_config():
     # Construct config from active connections
     config = {
         "mcpServers": {},
-        "geminiApiKey": connection_manager.gemini_api_key
+        "geminiApiKey": connection_manager.gemini_api_key,
+        "llmProvider": connection_manager.llm_provider,
+        "ollamaUrl": connection_manager.ollama_url
     }
     for name, conn in connection_manager.connections.items():
         config["mcpServers"][name] = {
@@ -114,6 +116,8 @@ async def get_config():
 class ConfigRequest(BaseModel):
     mcpServers: Dict[str, Dict[str, Any]]
     geminiApiKey: Optional[str] = None
+    llmProvider: Optional[str] = None
+    ollamaUrl: Optional[str] = None
 
 @app.post("/api/config")
 async def update_config(request: ConfigRequest):
@@ -123,7 +127,15 @@ async def update_config(request: ConfigRequest):
     # So we'll just add/update.
     if request.geminiApiKey is not None:
         connection_manager.gemini_api_key = request.geminiApiKey
-        connection_manager.save_config()
+    
+    if request.llmProvider is not None:
+        connection_manager.llm_provider = request.llmProvider
+        
+    if request.ollamaUrl is not None:
+        connection_manager.ollama_url = request.ollamaUrl
+
+    # Save globally after updating fields
+    connection_manager.save_config()
 
     for name, details in request.mcpServers.items():
         await connection_manager.add_server(
@@ -178,7 +190,13 @@ async def chat(request: ChatRequest, req: Request):
         print(f"\n--- [Turn {turn_index + 1}] Processing ---")
         
         # Query LLM
-        response_content = await query_llm(current_messages, tools, api_key=api_key)
+        response_content = await query_llm(
+            current_messages, 
+            tools, 
+            api_key=api_key, 
+            provider=connection_manager.llm_provider, 
+            model_url=connection_manager.ollama_url
+        )
         
         # Parse Response
         parsed_response = parse_llm_response(response_content)

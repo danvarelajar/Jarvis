@@ -13,6 +13,8 @@ function App() {
     const [serverConfigJson, setServerConfigJson] = useState('');
     const [isConfigExpanded, setIsConfigExpanded] = useState(false);
     const [geminiApiKey, setGeminiApiKey] = useState('');
+    const [llmProvider, setLlmProvider] = useState('gemini');
+    const [ollamaUrl, setOllamaUrl] = useState('http://10.3.0.7:11434');
     const messagesEndRef = useRef(null);
 
     const scrollToBottom = () => {
@@ -38,6 +40,8 @@ function App() {
                     if (config.geminiApiKey) {
                         setGeminiApiKey(config.geminiApiKey);
                     }
+                    if (config.llmProvider) setLlmProvider(config.llmProvider);
+                    if (config.ollamaUrl) setOllamaUrl(config.ollamaUrl);
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
                         setServerConfigJson(JSON.stringify(config, null, 2));
                         // Also update the UI list of connected servers
@@ -141,6 +145,61 @@ function App() {
 
                 <div className="mt-auto border-t border-gray-700 pt-4">
                     <div className="mb-4">
+                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">LLM Provider</h3>
+                        <select
+                            value={llmProvider}
+                            onChange={async (e) => {
+                                const newProvider = e.target.value;
+                                setLlmProvider(newProvider);
+                                try {
+                                    await fetch('/api/config', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            mcpServers: {},
+                                            geminiApiKey: geminiApiKey,
+                                            llmProvider: newProvider,
+                                            ollamaUrl: ollamaUrl
+                                        }),
+                                    });
+                                } catch (error) {
+                                    console.error("Failed to save provider:", error);
+                                }
+                            }}
+                            className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none mb-2"
+                        >
+                            <option value="gemini">Google Gemini (Cloud)</option>
+                            <option value="ollama">Ollama (Local)</option>
+                        </select>
+
+                        {llmProvider === 'ollama' && (
+                            <input
+                                type="text"
+                                value={ollamaUrl}
+                                onChange={(e) => setOllamaUrl(e.target.value)}
+                                onBlur={async () => {
+                                    try {
+                                        await fetch('/api/config', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                mcpServers: {},
+                                                geminiApiKey: geminiApiKey,
+                                                llmProvider: llmProvider,
+                                                ollamaUrl: ollamaUrl
+                                            }),
+                                        });
+                                    } catch (error) {
+                                        console.error("Failed to save Ollama URL:", error);
+                                    }
+                                }}
+                                placeholder="http://10.3.0.7:11434"
+                                className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
+                            />
+                        )}
+                    </div>
+
+                    <div className="mb-4">
                         <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">Gemini API Key</h3>
                         <input
                             type="password"
@@ -154,7 +213,9 @@ function App() {
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({
                                             mcpServers: {}, // Don't overwrite servers
-                                            geminiApiKey: geminiApiKey
+                                            geminiApiKey: geminiApiKey,
+                                            llmProvider: llmProvider,
+                                            ollamaUrl: ollamaUrl
                                         }),
                                     });
                                 } catch (error) {
