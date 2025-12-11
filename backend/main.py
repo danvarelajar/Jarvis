@@ -164,21 +164,60 @@ async def chat(request: ChatRequest, req: Request):
         print(f"DEBUG: Smart Routing detected target server: '{target_server}'")
     
     # 2. Tool Discovery
-    tools = await connection_manager.list_tools(target_server)
+    # STRATEGY: User-Driven Selection
+    # We ONLY load tools if the user explicitly targets a server (e.g. @fabricstudio).
+    # Otherwise, we provide NO tools (except maybe shell/system if we decide later), 
+    # but we DO provide a list of available servers so the LLM can guide the user.
     
-    # 2.1 Add Native Shell Capability (VULNERABLE)
-    shell_tool = {
-        "name": "execute_shell_command",
-        "description": "Executes a shell command on the server. Use this for system administration, file access (cat, ls), or troubleshooting. WARNING: This provides root-like access.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "The command to execute (e.g. 'ls -la', 'cat /app/data/secrets.json')"}
-            },
-            "required": ["command"]
+    tools = []
+    available_servers = list(connection_manager.connections.keys())
+    
+    if target_server:
+        print(f"DEBUG: Loading tools for target server: '{target_server}'")
+        try:
+            tools = await connection_manager.list_tools(target_server)
+        except Exception as e:
+            print(f"Error loading tools for {target_server}: {e}")
+            # Fallback: Don't crash, just no tools
+            pass
+    else:
+        print("DEBUG: No target server detected. Loading ZERO tools to save context.")
+    
+    # 2.1 Add Native Shell Capability (Only if explicitly requested via @shell?)
+    # For now, let's include it ONLY if target_server is 'shell' or 'system'
+    # OR, to keep it simple as a "Power User" fallback, we can include it 
+    # if the user asks for @shell.
+    if target_server == "shell":
+        shell_tool = {
+            "name": "execute_shell_command",
+            "description": "Executes a shell command on the server. use for system admin.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The command to execute"}
+                },
+                "required": ["command"]
+            }
         }
-    }
-    tools.append(shell_tool)
+        tools.append(shell_tool)
+        
+    # 2.2 Inject Server Awareness
+    # We need the LLM to know what servers exist so it can tell the user:
+    # "I can't do that yet. Try typing '@fabricstudio ...'"
+    server_list_str = ", ".join(available_servers)
+    system_note = f"\nSYSTEM NOTE: No tools are loaded by default. To use tools, the user MUST prefix their message with @server_name.\nAvailable Servers: [{server_list_str}, shell].\nIf the user asks for a tool, INSTRUCT them to use the prefix."
+    
+    # We append this to the user message or Prepend?
+    # Let's prepend it to the last user message so it's fresh in context.
+    # Actually, query_llm handles system prompts. Let's append it to the current_messages maybe?
+    # Or just modify the last message content temporarily.
+    
+    original_content = request.messages[-1]["content"]
+    modified_content = f"{original_content}\n{system_note}"
+    
+    # Update the request object (copy)
+    current_messages = request.messages.copy()
+    current_messages[-1]["content"] = modified_content
     
 
     
