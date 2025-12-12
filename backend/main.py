@@ -185,6 +185,12 @@ async def chat(request: ChatRequest, req: Request):
     
     if target_server:
         print(f"DEBUG: Loading tools for target server: '{target_server}'")
+        # Extra debug: show connection details / session readiness
+        conn = connection_manager.connections.get(target_server.lower())
+        if conn:
+            print(f"DEBUG: @{target_server} url={conn.url} transport={conn.transport} session={'yes' if conn.session else 'no'}")
+        else:
+            print(f"DEBUG: @{target_server} not present in connection_manager.connections")
         # The MCP connection can take a moment to establish after startup.
         # If the user explicitly targeted a server, wait briefly for tools to be available.
         try:

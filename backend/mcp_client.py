@@ -274,6 +274,16 @@ class GlobalConnectionManager:
                 
                 clean_content = "\n".join(clean_lines)
                 config = json.loads(clean_content)
+
+                # Debug: show configured MCP servers (redact header values)
+                try:
+                    servers_cfg = config.get("mcpServers", {}) or {}
+                    for srv_name, details in servers_cfg.items():
+                        hdrs = details.get("headers") or {}
+                        hdr_keys = list(hdrs.keys()) if isinstance(hdrs, dict) else []
+                        print(f"[Jarvis] Config mcpServers[{srv_name}]: url={details.get('url')} transport={details.get('transport','sse')} headers={hdr_keys}")
+                except Exception as e:
+                    print(f"[Jarvis] Failed to print server config summary: {e}")
                 
                 # Load Global Settings - MOVED TO LLM_CONFIG_FILE
                 # self.llm_provider = config.get("llmProvider", "gemini")
