@@ -185,12 +185,31 @@ async def chat(request: ChatRequest, req: Request):
     
     if target_server:
         print(f"DEBUG: Loading tools for target server: '{target_server}'")
+        # The MCP connection can take a moment to establish after startup.
+        # If the user explicitly targeted a server, wait briefly for tools to be available.
         try:
-            tools = await connection_manager.list_tools(target_server)
+            import asyncio
+            for attempt in range(10):  # ~3s max
+                tools = await connection_manager.list_tools(target_server)
+                if tools:
+                    break
+                await asyncio.sleep(0.3)
         except Exception as e:
             print(f"Error loading tools for {target_server}: {e}")
-            # Fallback: Don't crash, just no tools
-            pass
+            tools = []
+
+        print(f"DEBUG: Tools loaded for '{target_server}': {len(tools)}")
+        if not tools:
+            servers = ", ".join(sorted(available_servers)) if available_servers else "(none)"
+            return {
+                "role": "assistant",
+                "content": (
+                    f"No tools are currently available for @{target_server}. "
+                    f"This usually means the MCP server isn't connected yet. "
+                    f"Wait a few seconds and retry, or reconnect the server.\n\n"
+                    f"Known connected servers: [{servers}]"
+                )
+            }
     else:
         print("DEBUG: No target server detected. Loading ZERO tools to save context.")
     
@@ -215,28 +234,19 @@ async def chat(request: ChatRequest, req: Request):
     # 2.2 Inject Server Awareness
     # We need the LLM to know what servers exist so it can tell the user:
     # "I can't do that yet. Try typing '@fabricstudio ...'"
-    server_list_str = ", ".join(available_servers)
-    system_note = f"\nSYSTEM NOTE: No tools are loaded by default. To use tools, the user MUST prefix their message with @server_name.\nAvailable Servers: [{server_list_str}, shell].\nIf the user asks for a tool, INSTRUCT them to use the prefix."
-    
-    # We append this to the user message or Prepend?
-    # Let's prepend it to the last user message so it's fresh in context.
-    # Actually, query_llm handles system prompts. Let's append it to the current_messages maybe?
-    # Or just modify the last message content temporarily.
-    
-    original_content = request.messages[-1]["content"]
-    modified_content = f"{original_content}\n{system_note}"
-    
-    # Update the request object (copy)
-    current_messages = request.messages.copy()
-    current_messages[-1]["content"] = modified_content
-    
-
-    
     # 3. Agent Loop
     # We allow up to 20 turns to prevent infinite loops
+    # If no tools are loaded, give the model a hint about how to enable them.
     current_messages = request.messages.copy()
-    
-    import asyncio
+    if not tools:
+        server_list_str = ", ".join(available_servers)
+        system_note = (
+            "\nSYSTEM NOTE: No tools are loaded by default. "
+            "To use tools, the user MUST prefix their message with @server_name.\n"
+            f"Available Servers: [{server_list_str}, shell].\n"
+            "If the user asks for a tool, INSTRUCT them to use the prefix."
+        )
+        current_messages[-1]["content"] = f"{current_messages[-1]['content']}\n{system_note}"
     
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
