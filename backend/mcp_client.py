@@ -104,28 +104,40 @@ class PersistentConnection:
 
                 error_msg = str(e)
                 is_connection_error = False
+                
+                # Helper to check for connection errors in an exception
+                def check_connection_error(exc):
+                    msg = str(exc).lower()
+                    name = type(exc).__name__
+                    return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg
 
                 # Handle Python 3.11+ ExceptionGroup
                 if sys.version_info >= (3, 11) and isinstance(e, BaseExceptionGroup):
-                    # Try to find the interesting exception
-                    exceptions = e.exceptions
-                    if len(exceptions) > 0:
-                        inner = exceptions[0]
-                        # Dig deeper if it's another group or httpcore/httpx wrapper
-                        # For now, just getting the string of the inner exception is often enough
-                        error_msg = str(inner)
-                        # Check for common connection errors string sigs or types if imported
-                        if "ConnectError" in type(inner).__name__ or "os error" in str(inner).lower():
-                           is_connection_error = True
+                    # Unwrap ALL exceptions in the group
+                    new_error_msgs = []
+                    for inner in e.exceptions:
+                        new_error_msgs.append(f"{type(inner).__name__}: {str(inner)}")
+                        if check_connection_error(inner):
+                            is_connection_error = True
+                            # If we found a specific connection error, use its message as the main error message
+                            error_msg = str(inner)
+                    
+                    # If we didn't find a specific connection error, but have multiple errors, list them
+                    if not is_connection_error:
+                        error_msg = f"TaskGroup errors: {'; '.join(new_error_msgs)}"
+                        # Also print detailed traceback to stdout for debugging
+                        traceback.print_exc()
 
-                if "ConnectError" in type(e).__name__:
+                elif check_connection_error(e):
                     is_connection_error = True
 
-                if is_connection_error or "connection refused" in error_msg.lower() or "connect call failed" in error_msg.lower():
+                if is_connection_error:
                      print(f"Connection error for {self.server_name}: {error_msg}")
                 else:
-                     print(f"Connection error for {self.server_name}: {e}")
-                     # traceback.print_exc() # Keep disabled for cleaner logs unless debugging 
+                     print(f"Connection error for {self.server_name}: {error_msg}")
+                     if not isinstance(e, asyncio.CancelledError):
+                        traceback.print_exc()
+
                 self.session = None
                 # Clear cache on disconnection
                 self.tools_cache = None
