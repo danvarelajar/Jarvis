@@ -114,25 +114,29 @@ class PersistentConnection:
                     name = type(exc).__name__
                     return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg or "session terminated" in msg
 
-                # Robustly handle any ExceptionGroup-like object
-                if hasattr(e, 'exceptions'):
-                    # Unwrap ALL exceptions in the group
-                    new_error_msgs = []
-                    for inner in e.exceptions: # type: ignore
-                        new_error_msgs.append(f"{type(inner).__name__}: {str(inner)}")
-                        if check_connection_error(inner):
-                            is_connection_error = True
-                            # If we found a specific connection error, use its message as the main error message
-                            error_msg = str(inner)
-                    
-                    # If we didn't find a specific connection error, but have multiple errors, list them
-                    if not is_connection_error:
-                        error_msg = f"TaskGroup errors: {'; '.join(new_error_msgs)}"
-                        # Also print detailed traceback to stdout for debugging
-                        traceback.print_exc()
+                # Recursively flatten exceptions
+                def get_all_exceptions(exc):
+                    if hasattr(exc, 'exceptions'):
+                        excs = []
+                        for error in exc.exceptions:
+                            excs.extend(get_all_exceptions(error))
+                        return excs
+                    else:
+                        return [exc]
 
-                elif check_connection_error(e):
+                all_exceptions = get_all_exceptions(e)
+                connections_errors = [exc for exc in all_exceptions if check_connection_error(exc)]
+                
+                if connections_errors:
                     is_connection_error = True
+                    # Use the first connection error as the main message
+                    error_msg = str(connections_errors[0])
+                    print(f"Found connection error in group: {error_msg}")
+                else:
+                    # If multiple generic errors, join them
+                    if len(all_exceptions) > 1:
+                        error_msg = f"TaskGroup errors: {'; '.join([str(exc) for exc in all_exceptions])}"
+                        traceback.print_exc() # Print full trace for generic errors
 
                 if is_connection_error:
                      print(f"Connection error for {self.server_name}: {error_msg}")
