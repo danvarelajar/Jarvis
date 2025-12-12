@@ -241,6 +241,7 @@ class GlobalConnectionManager:
         self.connections: Dict[str, PersistentConnection] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
         self.gemini_api_key: Optional[str] = None
+        self.openai_api_key: Optional[str] = None
         self.llm_provider: str = "gemini" # gemini or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
         self.last_config_mtime = 0
@@ -322,6 +323,7 @@ class GlobalConnectionManager:
                 with open(SECRETS_FILE, 'r') as f:
                     secrets = json.load(f)
                     self.gemini_api_key = secrets.get("geminiApiKey")
+                    self.openai_api_key = secrets.get("openaiApiKey")
                 print(f"Loaded secrets from {SECRETS_FILE}")
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
@@ -364,7 +366,10 @@ class GlobalConnectionManager:
             print(f"Failed to save config: {e}")
 
         # Save Secrets
-        secrets = {"geminiApiKey": self.gemini_api_key}
+        secrets = {
+            "geminiApiKey": self.gemini_api_key,
+            "openaiApiKey": self.openai_api_key
+        }
         try:
             with open(SECRETS_FILE, 'w') as f:
                 json.dump(secrets, f, indent=2)

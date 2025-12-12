@@ -13,6 +13,7 @@ function App() {
     const [serverConfigJson, setServerConfigJson] = useState('');
     const [isConfigExpanded, setIsConfigExpanded] = useState(false);
     const [geminiApiKey, setGeminiApiKey] = useState('');
+    const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [llmProvider, setLlmProvider] = useState('gemini');
     const [ollamaUrl, setOllamaUrl] = useState('http://10.3.0.7:11434');
     const messagesEndRef = useRef(null);
@@ -37,9 +38,8 @@ function App() {
                 const response = await fetch('/api/config');
                 if (response.ok) {
                     const config = await response.json();
-                    if (config.geminiApiKey) {
-                        setGeminiApiKey(config.geminiApiKey);
-                    }
+                    if (config.geminiApiKey) setGeminiApiKey(config.geminiApiKey);
+                    if (config.openaiApiKey) setOpenaiApiKey(config.openaiApiKey);
                     if (config.llmProvider) setLlmProvider(config.llmProvider);
                     if (config.ollamaUrl) setOllamaUrl(config.ollamaUrl);
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
@@ -68,7 +68,8 @@ function App() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-gemini-api-key': geminiApiKey
+                    'x-gemini-api-key': geminiApiKey,
+                    'x-openai-api-key': openaiApiKey
                 },
                 body: JSON.stringify({ messages: [...messages, userMsg] }),
             });
@@ -158,6 +159,7 @@ function App() {
                                         body: JSON.stringify({
                                             mcpServers: {},
                                             geminiApiKey: geminiApiKey,
+                                            openaiApiKey: openaiApiKey,
                                             llmProvider: newProvider,
                                             ollamaUrl: ollamaUrl
                                         }),
@@ -169,6 +171,7 @@ function App() {
                             className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none mb-2"
                         >
                             <option value="gemini">Google Gemini (Cloud)</option>
+                            <option value="openai">OpenAI (GPT-4o Mini)</option>
                             <option value="ollama">Ollama (Local)</option>
                         </select>
 
@@ -185,6 +188,7 @@ function App() {
                                             body: JSON.stringify({
                                                 mcpServers: {},
                                                 geminiApiKey: geminiApiKey,
+                                                openaiApiKey: openaiApiKey,
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl
                                             }),
@@ -214,6 +218,7 @@ function App() {
                                         body: JSON.stringify({
                                             mcpServers: {}, // Don't overwrite servers
                                             geminiApiKey: geminiApiKey,
+                                            openaiApiKey: openaiApiKey,
                                             llmProvider: llmProvider,
                                             ollamaUrl: ollamaUrl
                                         }),
@@ -226,6 +231,36 @@ function App() {
                             className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
                         />
                     </div>
+
+                    {llmProvider === 'openai' && (
+                        <div className="mb-4">
+                            <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">OpenAI API Key</h3>
+                            <input
+                                type="password"
+                                value={openaiApiKey}
+                                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                                onBlur={async () => {
+                                    try {
+                                        await fetch('/api/config', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                                mcpServers: {},
+                                                geminiApiKey: geminiApiKey,
+                                                openaiApiKey: openaiApiKey,
+                                                llmProvider: llmProvider,
+                                                ollamaUrl: ollamaUrl
+                                            }),
+                                        });
+                                    } catch (error) {
+                                        console.error("Failed to save OpenAI key:", error);
+                                    }
+                                }}
+                                placeholder="sk-..."
+                                className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
+                            />
+                        </div>
+                    )}
 
                     <button
                         onClick={() => setIsConfigExpanded(!isConfigExpanded)}

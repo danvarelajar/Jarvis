@@ -102,6 +102,7 @@ async def get_config():
     config = {
         "mcpServers": {},
         "geminiApiKey": connection_manager.gemini_api_key,
+        "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url
     }
@@ -116,6 +117,7 @@ async def get_config():
 class ConfigRequest(BaseModel):
     mcpServers: Dict[str, Dict[str, Any]]
     geminiApiKey: Optional[str] = None
+    openaiApiKey: Optional[str] = None
     llmProvider: Optional[str] = None
     ollamaUrl: Optional[str] = None
 
@@ -127,6 +129,9 @@ async def update_config(request: ConfigRequest):
     # So we'll just add/update.
     if request.geminiApiKey is not None:
         connection_manager.gemini_api_key = request.geminiApiKey
+
+    if request.openaiApiKey is not None:
+        connection_manager.openai_api_key = request.openaiApiKey
     
     if request.llmProvider is not None:
         connection_manager.llm_provider = request.llmProvider
@@ -154,8 +159,13 @@ async def health_check():
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req: Request):
     user_message = request.messages[-1]["content"]
-    # Try header first, then fallback to persisted key
-    api_key = req.headers.get("x-gemini-api-key") or connection_manager.gemini_api_key
+    # Determine API Key based on provider
+    provider = connection_manager.llm_provider
+    api_key = None
+    if provider == "gemini":
+        api_key = req.headers.get("x-gemini-api-key") or connection_manager.gemini_api_key
+    elif provider == "openai":
+         api_key = req.headers.get("x-openai-api-key") or connection_manager.openai_api_key
     
     # 1. Smart Routing
     # Check for @server_name syntax to filter tools

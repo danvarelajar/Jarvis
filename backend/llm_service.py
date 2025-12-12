@@ -145,6 +145,33 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             
         return await query_ollama(messages, ollama_system_prompt, model_url)
 
+    if provider == "openai":
+        from openai import AsyncOpenAI
+        if not api_key:
+            return "Error: OPENAI_API_KEY is not set. Please provide it in the UI."
+        
+        client = AsyncOpenAI(api_key=api_key)
+        
+        # Prepare messages
+        openai_messages = [{"role": "system", "content": current_system_prompt}]
+        for msg in messages:
+             # Map 'model' to 'assistant' if needed
+             role = msg["role"]
+             if role == "model": role = "assistant"
+             openai_messages.append({"role": role, "content": msg["content"]})
+
+        try:
+            print("Sending request to OpenAI (GPT-4o Mini)...")
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=openai_messages,
+                temperature=0
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"OpenAI Error: {e}")
+            return f"Error communicating with OpenAI: {str(e)}"
+
     # Default to Gemini
     # Use provided key
     if not api_key:
