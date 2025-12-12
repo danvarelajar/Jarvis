@@ -232,9 +232,13 @@ class PersistentConnection:
 import json
 import os
 
-CONFIG_FILE = "/data/mcp_config.json"
-SECRETS_FILE = "/data/secrets.json"
-LLM_CONFIG_FILE = "/data/llm_config.json"
+# Simple rule (per lab requirement):
+# If these files exist under the repo-root `data/` directory, they must be loaded.
+JARVIS_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATA_DIR = os.path.join(JARVIS_ROOT, "data")
+CONFIG_FILE = os.path.join(DATA_DIR, "mcp_config.json")
+SECRETS_FILE = os.path.join(DATA_DIR, "secrets.json")
+LLM_CONFIG_FILE = os.path.join(DATA_DIR, "llm_config.json")
 
 class GlobalConnectionManager:
     def __init__(self):
@@ -251,6 +255,7 @@ class GlobalConnectionManager:
         # But usually this is called at startup before adding servers.
 
     async def load_config(self):
+        print(f"[Jarvis] Using DATA_DIR={DATA_DIR}")
         if os.path.exists(CONFIG_FILE):
             try:
                 current_mtime = os.path.getmtime(CONFIG_FILE)
@@ -303,6 +308,8 @@ class GlobalConnectionManager:
                 print(f"Loaded config from {CONFIG_FILE}")
             except Exception as e:
                 print(f"Failed to load config: {e}")
+        else:
+            print(f"[Jarvis] MCP config not found at {CONFIG_FILE}")
 
         # Load LLM Config
         if os.path.exists(LLM_CONFIG_FILE):
@@ -314,6 +321,8 @@ class GlobalConnectionManager:
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
             except Exception as e:
                 print(f"Failed to load LLM config: {e}")
+        else:
+            print(f"[Jarvis] LLM config not found at {LLM_CONFIG_FILE}")
 
 
         # Load secrets
@@ -326,6 +335,8 @@ class GlobalConnectionManager:
                 print(f"Loaded secrets from {SECRETS_FILE}")
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
+        else:
+            print(f"[Jarvis] Secrets not found at {SECRETS_FILE}")
 
     async def watch_config(self):
         print(f"Starting config watcher for {CONFIG_FILE}")

@@ -55,6 +55,14 @@ Jarvis is a web-based client for the Model Context Protocol (MCP). It allows you
 2.  Provide a name and the URL of the MCP server (e.g., `http://localhost:8000/sse`).
 3.  The application will connect and discover available tools.
 
+### Config + secrets files loaded at startup
+
+If these files exist, Jarvis will read them on startup:
+
+- `data/mcp_config.json` (MCP server configuration)
+- `data/secrets.json` (OpenAI API key)
+- `data/llm_config.json` (LLM provider config)
+
 ## Development
 
 If you want to run the application locally without Docker:
