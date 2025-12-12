@@ -323,7 +323,7 @@ class GlobalConnectionManager:
                 with open(SECRETS_FILE, 'r') as f:
                     secrets = json.load(f)
                     self.gemini_api_key = secrets.get("geminiApiKey")
-                    self.openai_api_key = secrets.get("openaiApiKey")
+                    self.openai_api_key = secrets.get("ApiKey")
                 print(f"Loaded secrets from {SECRETS_FILE}")
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
@@ -368,7 +368,7 @@ class GlobalConnectionManager:
         # Save Secrets
         secrets = {
             "geminiApiKey": self.gemini_api_key,
-            "openaiApiKey": self.openai_api_key
+            "ApiKey": self.openai_api_key
         }
         try:
             with open(SECRETS_FILE, 'w') as f:
