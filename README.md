@@ -1,11 +1,11 @@
 # Jarvis - MCP Client
 
-Jarvis is a web-based client for the Model Context Protocol (MCP), powered by Google's Gemini LLM. It allows you to connect to various MCP servers and interact with them using natural language through a chat interface.
+Jarvis is a web-based client for the Model Context Protocol (MCP). It allows you to connect to various MCP servers and interact with them using natural language through a chat interface.
 
 ## Features
 
 -   **MCP Client:** Connect to any standard MCP server via SSE (Server-Sent Events).
--   **LLM Integration:** Powered by Google Gemini Pro 2.5 Flash.
+-   **LLM Integration:** Powered by OpenAI `gpt-4o-mini` (configurable in the UI).
 -   **Tool Use:** Automatically discovers and utilizes tools provided by connected MCP servers.
 -   **Modern UI:** Built with React, Vite, and TailwindCSS.
 -   **Dockerized:** Easy deployment with Docker Compose.
@@ -46,9 +46,9 @@ Jarvis is a web-based client for the Model Context Protocol (MCP), powered by Go
 ## Configuration
 
 ### API Key Setup
-1.  When you first load the application, you will be prompted to enter your **Gemini API Key**.
+1.  When you first load the application, you will be prompted to enter your **OpenAI API Key**.
 2.  Enter the key and click "Save".
-3.  The key is securely stored locally in `data/secrets.json` (mapped to your host machine).
+3.  The key is stored locally in `data/secrets.json` (mapped to your host machine).
 
 ### Connecting to MCP Servers
 1.  Use the "Connect Server" interface to add MCP servers.

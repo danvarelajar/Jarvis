@@ -36,7 +36,6 @@ REMINDER:
 Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.
 """
 
-import google.generativeai as genai
 import httpx
 
 async def query_ollama(messages: list, system_prompt: str, model_url: str) -> str:
@@ -107,27 +106,12 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "gemini", model_url: str = None) -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None) -> str:
     """
     Queries the selected LLM provider.
     """
     global LAST_REQUEST_TIME
     
-    # Enforce Rate Limit for Gemini
-    if provider == "gemini":
-        current_time = time.time()
-        elapsed = current_time - LAST_REQUEST_TIME
-        if elapsed < RATE_LIMIT_INTERVAL:
-            wait_time = RATE_LIMIT_INTERVAL - elapsed
-            print(f"RATE LIMIT: Sleeping {wait_time:.2f}s to respect 5 RPM limit...")
-            import asyncio
-            await asyncio.sleep(wait_time)
-        
-        # Update timestamp immediately before request (or after? before is safer to prevent burst)
-        # Actually after is safer to include the request duration in the interval? 
-        # No, commonly start-to-start is the metric.
-        LAST_REQUEST_TIME = time.time()
-
     # Construct the full prompt including system instructions
     current_system_prompt = SYSTEM_PROMPT
     if tools:
@@ -171,81 +155,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         except Exception as e:
             print(f"OpenAI Error: {e}")
             return f"Error communicating with OpenAI: {str(e)}"
-
-    # Default to Gemini
-    # Use provided key
-    if not api_key:
-        return "Error: GEMINI_API_KEY is not set. Please provide it in the UI."
-
-    genai.configure(api_key=api_key)
-    
-    # Gemini uses a different message format. We need to adapt.
-    # But for simplicity in this "text-in, text-out" architecture, 
-    # we can just construct a prompt or use the chat session.
-    
-    
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    
-    # Convert our message format to Gemini's
-    # our format: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
-    # Gemini format: history=[{"role": "user", "parts": ["..."]}, {"role": "model", "parts": ["..."]}]
-    
-    gemini_history = []
-    # Add system prompt as the first user message? Or just prepend to the first message?
-    # Gemini Pro doesn't have a dedicated "system" role in the chat history yet (in some versions).
-    # Best practice: Prepend system prompt to the first user message.
-    
-    first_message_content = current_system_prompt
-    
-    for i, msg in enumerate(messages):
-        role = "user" if msg["role"] == "user" else "model"
-        content = msg["content"]
-        
-        if i == 0 and role == "user":
-            content = f"{first_message_content}\n\nUser: {content}"
-        elif i == 0 and role == "model":
-             # This shouldn't happen usually, but if it does, we prepend to it? 
-             # Or we insert a dummy user message.
-             gemini_history.append({"role": "user", "parts": [first_message_content]})
-        
-        gemini_history.append({"role": role, "parts": [content]})
-        
-    # The last message is the new prompt, so pop it
-    last_message = gemini_history.pop()
-    prompt = last_message["parts"][0]
-    
-    chat = model.start_chat(history=gemini_history)
-    
-    # Configure safety settings
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-    
-    # Debug Logging
-    print(f"\n--- [Gemini Debug] Request ---")
-    print(f"Tools Count: {len(tools) if tools else 0}")
-    if tools:
-        print(f"Tools Size (approx chars): {len(tool_descriptions)}")
-    
-    print(f"Messages Count: {len(gemini_history) + 1}") # +1 for prompt
-    print(f"Prompt (Last Message) Size: {len(prompt)}")
-    
-    # Dump full history object for inspection if needed (careful with size)
-    # print(f"Full Gemini History: {gemini_history}")
-    
-    try:
-        print("Sending request to Gemini...")
-        response = await chat.send_message_async(prompt, safety_settings=safety_settings)
-        print("Response received.")
-        print(f"Response Tokens (approx chars): {len(response.text)}")
-        return response.text
-    except Exception as e:
-        print(f"LLM Error Details: {repr(e)}")
-        return f"Error communicating with LLM: {str(e)}"
+    return "Error: Unsupported LLM provider. Use 'openai' or 'ollama'."
 
 def parse_llm_response(response_content: str) -> dict:
     """

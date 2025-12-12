@@ -66,7 +66,12 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     # Actually, the server asks the client to sample. The client (us) has the LLM.
     # The request might include `includeContext` or `stopSequences`.
     
-    response_text = await query_llm(messages)
+    # Use configured provider and stored key for MCP sampling callbacks.
+    provider = connection_manager.llm_provider
+    api_key = None
+    if provider == "openai":
+        api_key = connection_manager.openai_api_key
+    response_text = await query_llm(messages, api_key=api_key, provider=provider, model_url=connection_manager.ollama_url)
     
     # Construct result
     return types.CreateMessageResult(
@@ -75,7 +80,7 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
             type="text",
             text=response_text
         ),
-        model="gemini-2.5-flash",
+        model="gpt-4o-mini" if provider == "openai" else "ollama",
         stopReason="end_turn"
     )
 
@@ -101,7 +106,6 @@ async def get_config():
     # Construct config from active connections
     config = {
         "mcpServers": {},
-        "geminiApiKey": connection_manager.gemini_api_key,
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url
@@ -116,7 +120,6 @@ async def get_config():
 
 class ConfigRequest(BaseModel):
     mcpServers: Dict[str, Dict[str, Any]]
-    geminiApiKey: Optional[str] = None
     openaiApiKey: Optional[str] = None
     llmProvider: Optional[str] = None
     ollamaUrl: Optional[str] = None
@@ -127,9 +130,6 @@ async def update_config(request: ConfigRequest):
     # For simplicity, we'll just add new ones. 
     # To fully replace, we'd need to stop existing connections, which we haven't implemented.
     # So we'll just add/update.
-    if request.geminiApiKey is not None:
-        connection_manager.gemini_api_key = request.geminiApiKey
-
     if request.openaiApiKey is not None:
         connection_manager.openai_api_key = request.openaiApiKey
     
@@ -162,9 +162,7 @@ async def chat(request: ChatRequest, req: Request):
     # Determine API Key based on provider
     provider = connection_manager.llm_provider
     api_key = None
-    if provider == "gemini":
-        api_key = req.headers.get("x-gemini-api-key") or connection_manager.gemini_api_key
-    elif provider == "openai":
+    if provider == "openai":
          api_key = req.headers.get("x-openai-api-key") or connection_manager.openai_api_key
     
     # 1. Smart Routing

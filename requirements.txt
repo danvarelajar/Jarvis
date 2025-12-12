@@ -3,5 +3,4 @@ uvicorn
 httpx
 pydantic
 mcp
-google-generativeai
 openai

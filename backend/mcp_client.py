@@ -240,9 +240,8 @@ class GlobalConnectionManager:
     def __init__(self):
         self.connections: Dict[str, PersistentConnection] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
-        self.gemini_api_key: Optional[str] = None
         self.openai_api_key: Optional[str] = None
-        self.llm_provider: str = "gemini" # gemini or ollama
+        self.llm_provider: str = "openai" # openai or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
         self.last_config_mtime = 0
         
@@ -310,7 +309,7 @@ class GlobalConnectionManager:
             try:
                 with open(LLM_CONFIG_FILE, 'r') as f:
                     llm_config = json.load(f)
-                    self.llm_provider = llm_config.get("llmProvider", "gemini")
+                    self.llm_provider = llm_config.get("llmProvider", "openai")
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
             except Exception as e:
@@ -322,8 +321,8 @@ class GlobalConnectionManager:
             try:
                 with open(SECRETS_FILE, 'r') as f:
                     secrets = json.load(f)
-                    self.gemini_api_key = secrets.get("geminiApiKey")
-                    self.openai_api_key = secrets.get("ApiKey")
+                    # Prefer openaiApiKey, but keep backwards-compatibility with older "ApiKey"
+                    self.openai_api_key = secrets.get("openaiApiKey") or secrets.get("ApiKey")
                 print(f"Loaded secrets from {SECRETS_FILE}")
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
@@ -366,10 +365,7 @@ class GlobalConnectionManager:
             print(f"Failed to save config: {e}")
 
         # Save Secrets
-        secrets = {
-            "geminiApiKey": self.gemini_api_key,
-            "ApiKey": self.openai_api_key
-        }
+        secrets = { "openaiApiKey": self.openai_api_key }
         try:
             with open(SECRETS_FILE, 'w') as f:
                 json.dump(secrets, f, indent=2)
