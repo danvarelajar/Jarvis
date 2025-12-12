@@ -112,7 +112,7 @@ class PersistentConnection:
                 def check_connection_error(exc):
                     msg = str(exc).lower()
                     name = type(exc).__name__
-                    return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg
+                    return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg or "session terminated" in msg
 
                 # Robustly handle any ExceptionGroup-like object
                 if hasattr(e, 'exceptions'):
@@ -136,6 +136,13 @@ class PersistentConnection:
 
                 if is_connection_error:
                      print(f"Connection error for {self.server_name}: {error_msg}")
+                     
+                     # Fallback logic: If HTTP fails, try SSE
+                     if self.transport == "http":
+                         print(f"Attempting fallback to SSE transport for {self.server_name}...")
+                         self.transport = "sse"
+                         backoff_delay = 1 # Reset backoff for immediate retry
+                         continue # Retry immediately
                 else:
                      print(f"Connection error for {self.server_name}: {error_msg}")
                      if not isinstance(e, asyncio.CancelledError):
