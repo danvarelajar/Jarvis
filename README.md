@@ -55,23 +55,6 @@ Jarvis is a web-based client for the Model Context Protocol (MCP). It allows you
 2.  Provide a name and the URL of the MCP server (e.g., `http://localhost:8000/sse`).
 3.  The application will connect and discover available tools.
 
-### Data directory (startup config + secrets)
-
-Jarvis reads/writes these files in its data directory:
-
-- `mcp_config.json`
-- `secrets.json`
-- `llm_config.json`
-
-Defaults:
-
-- In Docker Compose: `./data` on your host is mounted to `/data` in the container.
-- When running locally: Jarvis uses `./data` under the repo root.
-
-You can override the location with:
-
-- `JARVIS_DATA_DIR=/some/path`
-
 ## Development
 
 If you want to run the application locally without Docker:

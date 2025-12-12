@@ -26,10 +26,9 @@ COPY --from=build /app/frontend/dist /app/frontend/dist
 
 # Environment variables
 
-# Create data directory for persistence (compose mounts ./data -> /data)
-RUN mkdir -p /data
-VOLUME /data
-ENV JARVIS_DATA_DIR=/data
+# Create data directory for persistence
+RUN mkdir -p /app/data
+VOLUME /app/data
 
 # Expose port
 EXPOSE 3000
