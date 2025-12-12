@@ -102,9 +102,6 @@ class PersistentConnection:
                 import traceback
                 import sys
                 
-                # DEBUG: Helper to verify new code is running
-                print(f"DEBUG: Connection exception caught for {self.server_name}. Type: {type(e)}")
-
                 error_msg = str(e)
                 is_connection_error = False
                 
@@ -131,7 +128,6 @@ class PersistentConnection:
                     is_connection_error = True
                     # Use the first connection error as the main message
                     error_msg = str(connections_errors[0])
-                    print(f"Found connection error in group: {error_msg}")
                 else:
                     # If multiple generic errors, join them
                     if len(all_exceptions) > 1:
