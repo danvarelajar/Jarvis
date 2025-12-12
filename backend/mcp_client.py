@@ -101,6 +101,9 @@ class PersistentConnection:
             except Exception as e:
                 import traceback
                 import sys
+                
+                # DEBUG: Helper to verify new code is running
+                print(f"DEBUG: Connection exception caught for {self.server_name}. Type: {type(e)}")
 
                 error_msg = str(e)
                 is_connection_error = False
@@ -111,11 +114,11 @@ class PersistentConnection:
                     name = type(exc).__name__
                     return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg
 
-                # Handle Python 3.11+ ExceptionGroup
-                if sys.version_info >= (3, 11) and isinstance(e, BaseExceptionGroup):
+                # Robustly handle any ExceptionGroup-like object
+                if hasattr(e, 'exceptions'):
                     # Unwrap ALL exceptions in the group
                     new_error_msgs = []
-                    for inner in e.exceptions:
+                    for inner in e.exceptions: # type: ignore
                         new_error_msgs.append(f"{type(inner).__name__}: {str(inner)}")
                         if check_connection_error(inner):
                             is_connection_error = True
