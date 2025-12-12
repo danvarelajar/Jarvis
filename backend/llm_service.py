@@ -101,11 +101,33 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str) -> st
         print(f"Ollama Error Details: {repr(e)}")
         return f"Error communicating with Ollama at {model_url}: {str(e)}"
 
+import time
+
+# Global Rate Limiter
+LAST_REQUEST_TIME = 0
+RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
+
 async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "gemini", model_url: str = None) -> str:
     """
     Queries the selected LLM provider.
     """
+    global LAST_REQUEST_TIME
     
+    # Enforce Rate Limit for Gemini
+    if provider == "gemini":
+        current_time = time.time()
+        elapsed = current_time - LAST_REQUEST_TIME
+        if elapsed < RATE_LIMIT_INTERVAL:
+            wait_time = RATE_LIMIT_INTERVAL - elapsed
+            print(f"RATE LIMIT: Sleeping {wait_time:.2f}s to respect 5 RPM limit...")
+            import asyncio
+            await asyncio.sleep(wait_time)
+        
+        # Update timestamp immediately before request (or after? before is safer to prevent burst)
+        # Actually after is safer to include the request duration in the interval? 
+        # No, commonly start-to-start is the metric.
+        LAST_REQUEST_TIME = time.time()
+
     # Construct the full prompt including system instructions
     current_system_prompt = SYSTEM_PROMPT
     if tools:

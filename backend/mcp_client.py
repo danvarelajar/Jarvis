@@ -385,6 +385,9 @@ class GlobalConnectionManager:
             print(f"Failed to save LLM config: {e}")
 
     async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
+        # Normalize to lowercase to prevent duplicates
+        server_name = server_name.lower()
+        
         # Stop existing if any
         if server_name in self.connections:
             print(f"Stopping existing connection for {server_name}...")
@@ -406,6 +409,7 @@ class GlobalConnectionManager:
     async def list_tools(self, server_name: str = None) -> List[dict]:
         tools = []
         if server_name:
+            server_name = server_name.lower() # Normalize
             conn = self.connections.get(server_name)
             if conn:
                 tools.extend(await conn.get_tools())
@@ -415,6 +419,7 @@ class GlobalConnectionManager:
         return tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
+        server_name = server_name.lower() # Normalize
         conn = self.connections.get(server_name)
         if not conn or not conn.session:
             raise ValueError(f"Server {server_name} not found or not connected")
@@ -430,7 +435,8 @@ def parse_server_route(message: str) -> Optional[str]:
     # Matches @{name} or @name, preceded by start of string or whitespace
     match = re.search(r'(?:^|\s)@(?:\{([a-zA-Z0-9_-]+)\}|([a-zA-Z0-9_-]+))', message)
     if match:
-        return match.group(1) or match.group(2)
+        name = match.group(1) or match.group(2)
+        return name.lower() if name else None
     return None
 
 # Singleton instance

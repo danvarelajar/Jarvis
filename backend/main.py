@@ -228,11 +228,8 @@ async def chat(request: ChatRequest, req: Request):
     import asyncio
     
     for turn_index in range(20):
-        # PACING: Wait 2 seconds between turns to respect Gemini Free Tier limits (20 RPM)
-        # This prevents a single complex task from exhausting the minute's quota in < 10 seconds.
-        if turn_index > 0:
-             print(f"PACING: Sleeping 2s to respect rate limits...")
-             await asyncio.sleep(2)
+        # PACING: Handled by llm_service.py globally now
+
 
         print(f"\n--- [Turn {turn_index + 1}] Processing ---")
         
