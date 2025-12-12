@@ -376,7 +376,18 @@ class GlobalConnectionManager:
             print(f"Failed to save config: {e}")
 
         # Save Secrets
-        secrets = { "openaiApiKey": self.openai_api_key }
+        # Preserve existing secrets if the in-memory key is empty/None to avoid "reset on restart".
+        existing_openai_key = None
+        try:
+            if os.path.exists(SECRETS_FILE):
+                with open(SECRETS_FILE, "r") as f:
+                    existing = json.load(f)
+                    existing_openai_key = existing.get("openaiApiKey") or existing.get("ApiKey")
+        except Exception as e:
+            print(f"Failed to read existing secrets (will not preserve): {e}")
+
+        key_to_write = (self.openai_api_key or "").strip() or (existing_openai_key or "").strip() or None
+        secrets = {"openaiApiKey": key_to_write}
         try:
             with open(SECRETS_FILE, 'w') as f:
                 json.dump(secrets, f, indent=2)

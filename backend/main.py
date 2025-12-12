@@ -130,8 +130,11 @@ async def update_config(request: ConfigRequest):
     # For simplicity, we'll just add new ones. 
     # To fully replace, we'd need to stop existing connections, which we haven't implemented.
     # So we'll just add/update.
+    # Do not clobber an existing key with empty string/null-equivalent.
     if request.openaiApiKey is not None:
-        connection_manager.openai_api_key = request.openaiApiKey
+        candidate = request.openaiApiKey.strip()
+        if candidate:
+            connection_manager.openai_api_key = candidate
     
     if request.llmProvider is not None:
         connection_manager.llm_provider = request.llmProvider

@@ -150,12 +150,14 @@ function App() {
                                 const newProvider = e.target.value;
                                 setLlmProvider(newProvider);
                                 try {
+                                    // Avoid overwriting a saved key with an empty value.
+                                    const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
                                     await fetch('/api/config', {
                                         method: 'POST',
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({
                                             mcpServers: {},
-                                            openaiApiKey: openaiApiKey,
+                                            ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                             llmProvider: newProvider,
                                             ollamaUrl: ollamaUrl
                                         }),
@@ -177,12 +179,13 @@ function App() {
                                 onChange={(e) => setOllamaUrl(e.target.value)}
                                 onBlur={async () => {
                                     try {
+                                        const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
                                         await fetch('/api/config', {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({
                                                 mcpServers: {},
-                                                openaiApiKey: openaiApiKey,
+                                                ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl
                                             }),
@@ -206,12 +209,13 @@ function App() {
                                 onChange={(e) => setOpenaiApiKey(e.target.value)}
                                 onBlur={async () => {
                                     try {
+                                        const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
                                         await fetch('/api/config', {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({
                                                 mcpServers: {},
-                                                openaiApiKey: openaiApiKey,
+                                                ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl
                                             }),
