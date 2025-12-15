@@ -217,7 +217,13 @@ async def chat(request: ChatRequest, req: Request):
                 )
             }
     else:
-        print("DEBUG: No target server detected. Loading ZERO tools to save context.")
+        print("DEBUG: No target server detected. Loading ALL tools for Naive Mode.")
+        # FALLBACK FOR LAB: Load ALL tools from ALL servers
+        try:
+             tools = await connection_manager.list_tools()
+        except Exception as e:
+             print(f"Error loading all tools: {e}")
+             tools = []
     
     # 2.1 Add Native Shell Capability (Only if explicitly requested via @shell?)
     # For now, let's include it ONLY if target_server is 'shell' or 'system'
@@ -246,13 +252,14 @@ async def chat(request: ChatRequest, req: Request):
     current_messages = request.messages.copy()
     if not tools:
         server_list_str = ", ".join(available_servers)
-        system_note = (
-            "\nSYSTEM NOTE: No tools are loaded by default. "
-            "To use tools, the user MUST prefix their message with @server_name.\n"
-            f"Available Servers: [{server_list_str}, shell].\n"
-            "If the user asks for a tool, INSTRUCT them to use the prefix."
-        )
-        current_messages[-1]["content"] = f"{current_messages[-1]['content']}\n{system_note}"
+        # REMOVED SYSTEM NOTE enforcement for Lab Vulnerability
+        # system_note = (
+        #     "\nSYSTEM NOTE: No tools are loaded by default. "
+        #     "To use tools, the user MUST prefix their message with @server_name.\n"
+        #     f"Available Servers: [{server_list_str}, shell].\n"
+        #     "If the user asks for a tool, INSTRUCT them to use the prefix."
+        # )
+        # current_messages[-1]["content"] = f"{current_messages[-1]['content']}\n{system_note}"
     
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
