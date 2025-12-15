@@ -292,7 +292,8 @@ function App() {
                                                         style={vscDarkPlus}
                                                         language={match[1]}
                                                         PreTag="div"
-                                                        className="rounded-md !bg-gray-900 !p-3 !my-2"
+                                                        wrapLongLines={true}
+                                                        className="rounded-md !bg-gray-900 !p-3 !my-2 !whitespace-pre-wrap !break-words max-w-full overflow-x-auto"
                                                     >
                                                         {String(children).replace(/\n$/, '')}
                                                     </SyntaxHighlighter>
@@ -310,7 +311,7 @@ function App() {
                                 {msg.tool_result && (
                                     <div className="mt-2 p-2 bg-black/30 rounded text-xs font-mono text-green-300 border-l-2 border-green-500 overflow-x-auto">
                                         <div className="font-bold mb-1">Tool Result:</div>
-                                        <pre>{(() => {
+                                        <pre className="whitespace-pre-wrap break-words">{(() => {
                                             try {
                                                 const parsed = JSON.parse(msg.tool_result);
                                                 return JSON.stringify(parsed, null, 2);
