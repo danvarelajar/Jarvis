@@ -16,8 +16,19 @@ from mcp.client.streamable_http import streamablehttp_client
 import time
 
 class PersistentConnection:
-    def __init__(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", sampling_callback: Optional[Callable[[Any], Any]] = None):
-        self.server_name = server_name
+    def __init__(
+        self,
+        server_key: str,
+        display_name: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        transport: str = "sse",
+        sampling_callback: Optional[Callable[[Any], Any]] = None,
+    ):
+        # server_key is the normalized internal key (typically lowercase).
+        # display_name is what the user configured (preserve case), and is used for tool name prefixes.
+        self.server_key = server_key
+        self.display_name = display_name
         self.url = url
         self.headers = headers or {}
         self.transport = transport
@@ -49,7 +60,7 @@ class PersistentConnection:
                     async with streamablehttp_client(self.url, headers=self.headers) as (read, write, _):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"Connected to {self.server_name} via HTTP")
+                            print(f"Connected to {self.display_name} via HTTP")
                             await session.initialize()
                             
                             # Prefetch tools to populate cache
@@ -87,7 +98,7 @@ class PersistentConnection:
                     async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"Connected to {self.server_name} via SSE")
+                            print(f"Connected to {self.display_name} via SSE")
                             await session.initialize()
                             
                             # Prefetch tools to populate cache
@@ -135,16 +146,16 @@ class PersistentConnection:
                         traceback.print_exc() # Print full trace for generic errors
 
                 if is_connection_error:
-                     print(f"Connection error for {self.server_name}: {error_msg}")
+                     print(f"Connection error for {self.display_name}: {error_msg}")
                      
                      # Fallback logic: If HTTP fails, try SSE
                      if self.transport == "http":
-                         print(f"Attempting fallback to SSE transport for {self.server_name}...")
+                         print(f"Attempting fallback to SSE transport for {self.display_name}...")
                          self.transport = "sse"
                          backoff_delay = 1 # Reset backoff for immediate retry
                          continue # Retry immediately
                 else:
-                     print(f"Connection error for {self.server_name}: {error_msg}")
+                     print(f"Connection error for {self.display_name}: {error_msg}")
                      if not isinstance(e, asyncio.CancelledError):
                         traceback.print_exc()
 
@@ -154,7 +165,7 @@ class PersistentConnection:
                 self.resources_cache = None
                 self.prompts_cache = None
                 
-                print(f"Reconnecting to {self.server_name} in {backoff_delay} seconds...")
+                print(f"Reconnecting to {self.display_name} in {backoff_delay} seconds...")
                 await asyncio.sleep(backoff_delay)
                 
                 # Increase backoff
@@ -168,7 +179,7 @@ class PersistentConnection:
             except asyncio.CancelledError:
                 pass
             self._task = None
-            print(f"Stopped connection to {self.server_name}")
+            print(f"Stopped connection to {self.display_name}")
 
     async def get_tools(self):
         if not self.session:
@@ -184,7 +195,8 @@ class PersistentConnection:
             for t in result.tools:
                 tool_dump = t.model_dump()
                 # Prefix tool name with server name
-                tool_dump['name'] = f"{self.server_name}__{t.name}"
+                # Use display_name to preserve case expected by labs (e.g., Booking__search_flights)
+                tool_dump['name'] = f"{self.display_name}__{t.name}"
                 self.tools_cache.append(tool_dump)
                 
             self.tools_cache_timestamp = current_time
@@ -226,7 +238,7 @@ class PersistentConnection:
             self.prompts_cache_timestamp = current_time
             return self.prompts_cache
         except Exception as e:
-            print(f"Error listing prompts for {self.server_name}: {e}")
+            print(f"Error listing prompts for {self.display_name}: {e}")
             return []
 
 import json
@@ -243,10 +255,16 @@ LLM_CONFIG_FILE = os.path.join(DATA_DIR, "llm_config.json")
 class GlobalConnectionManager:
     def __init__(self):
         self.connections: Dict[str, PersistentConnection] = {}
+        # Map normalized server key -> display name as provided by the user/config (preserve case)
+        self.server_display_names: Dict[str, str] = {}
         self.sampling_callback: Optional[Callable[[Any], Any]] = None
         self.openai_api_key: Optional[str] = None
         self.llm_provider: str = "openai" # openai or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
+        # Lab alignment: controls how aggressively the agent exposes tools and follows untrusted text.
+        # - defender: least-privilege tool exposure + safer tool-output framing
+        # - naive: intentionally permissive to demonstrate failures
+        self.agent_mode: str = "defender"
         self.last_config_mtime = 0
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
@@ -295,7 +313,8 @@ class GlobalConnectionManager:
                 # 2. Iterate through new config
                 new_servers = set()
                 for name, details in config.get("mcpServers", {}).items():
-                    new_servers.add(name)
+                    normalized = (name or "").lower()
+                    new_servers.add(normalized)
                     # Check if update needed (simplest is to just re-add, which restarts)
                     # or check if it's new
                     await self.add_server(
@@ -313,6 +332,7 @@ class GlobalConnectionManager:
                     if name in self.connections:
                         await self.connections[name].stop()
                         del self.connections[name]
+                        self.server_display_names.pop(name, None)
                         
                 self.last_config_mtime = current_mtime
                 print(f"Loaded config from {CONFIG_FILE}")
@@ -328,6 +348,7 @@ class GlobalConnectionManager:
                     llm_config = json.load(f)
                     self.llm_provider = llm_config.get("llmProvider", "openai")
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
+                    self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
             except Exception as e:
                 print(f"Failed to load LLM config: {e}")
@@ -364,8 +385,10 @@ class GlobalConnectionManager:
     def save_config(self):
         # Save MCP Servers
         config = {"mcpServers": {}}
-        for name, conn in self.connections.items():
-            config["mcpServers"][name] = {
+        for server_key, conn in self.connections.items():
+            # Persist using the original display name (preserve case for labs)
+            display_name = conn.display_name or self.server_display_names.get(server_key) or server_key
+            config["mcpServers"][display_name] = {
                 "url": conn.url,
                 "headers": conn.headers,
                 "transport": conn.transport
@@ -408,7 +431,8 @@ class GlobalConnectionManager:
         # Save LLM Config
         llm_config = {
             "llmProvider": self.llm_provider,
-            "ollamaUrl": self.ollama_url
+            "ollamaUrl": self.ollama_url,
+            "agentMode": self.agent_mode
         }
         try:
             with open(LLM_CONFIG_FILE, 'w') as f:
@@ -419,21 +443,23 @@ class GlobalConnectionManager:
 
     async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
         # Normalize to lowercase to prevent duplicates
-        server_name = server_name.lower()
+        display_name = server_name
+        server_key = (server_name or "").lower()
         
         # Stop existing if any
-        if server_name in self.connections:
-            print(f"Stopping existing connection for {server_name}...")
-            await self.connections[server_name].stop()
+        if server_key in self.connections:
+            print(f"Stopping existing connection for {server_key}...")
+            await self.connections[server_key].stop()
 
-        connection = PersistentConnection(server_name, url, headers, transport, sampling_callback=self.sampling_callback)
-        self.connections[server_name] = connection
+        self.server_display_names[server_key] = display_name
+        connection = PersistentConnection(server_key, display_name, url, headers, transport, sampling_callback=self.sampling_callback)
+        self.connections[server_key] = connection
         connection._task = asyncio.create_task(connection.start())
         if save:
             self.save_config()
 
     def get_session(self, server_name: str) -> Optional[ClientSession]:
-        conn = self.connections.get(server_name)
+        conn = self.connections.get((server_name or "").lower())
         return conn.session if conn else None
     
     def get_all_sessions(self) -> Dict[str, ClientSession]:
@@ -442,8 +468,8 @@ class GlobalConnectionManager:
     async def list_tools(self, server_name: str = None) -> List[dict]:
         tools = []
         if server_name:
-            server_name = server_name.lower() # Normalize
-            conn = self.connections.get(server_name)
+            server_key = (server_name or "").lower() # Normalize
+            conn = self.connections.get(server_key)
             if conn:
                 tools.extend(await conn.get_tools())
         else:
@@ -452,8 +478,8 @@ class GlobalConnectionManager:
         return tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
-        server_name = server_name.lower() # Normalize
-        conn = self.connections.get(server_name)
+        server_key = (server_name or "").lower() # Normalize
+        conn = self.connections.get(server_key)
         if not conn or not conn.session:
             raise ValueError(f"Server {server_name} not found or not connected")
         
