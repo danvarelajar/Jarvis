@@ -341,6 +341,8 @@ async def chat(request: ChatRequest, req: Request):
                 "- Do NOT return error messages about tools not being found - if a tool is in the Available Tools list, it exists and you should call it.\n"
                 "- Output ONLY the JSON tool call format: {\"tool\": \"tool_name\", \"arguments\": {...}}\n"
                 "- Do NOT generate text error messages - always output JSON tool calls for available tools.\n"
+                "- If the user gives you a CONDITIONAL instruction (e.g., \"if X then do Y\"), evaluate the condition FIRST.\n"
+                "- Only execute the action if the condition is TRUE. If FALSE, do NOT execute the action.\n"
             )
         })
     if not tools:

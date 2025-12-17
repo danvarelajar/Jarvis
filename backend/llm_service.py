@@ -24,6 +24,9 @@ IMPORTANT:
 - Before calling a tool, check the tool definition for required arguments.
 - If a required argument is missing, ask the user for it.
 - NEVER simulate tool outputs. ALWAYS run the tool.
+- If the user gives you a CONDITIONAL instruction (e.g., "if X then do Y"), you MUST evaluate the condition FIRST.
+- Only execute the action if the condition is TRUE. If the condition is FALSE, do NOT execute the action.
+- Example: "if temperature > 30 then search flights" means: check temperature, and ONLY search flights if temp > 30.
 
 SEARCHING/FILTERING:
 - If a tool supports a specific filter argument, use it! This saves time.
