@@ -498,5 +498,26 @@ def parse_server_route(message: str) -> Optional[str]:
         return name.lower() if name else None
     return None
 
+def parse_all_server_routes(message: str) -> list[str]:
+    """
+    Scans for ALL @{server_name} or @server_name mentions in the message.
+    Returns a list of all server names found (lowercased, deduplicated).
+    """
+    # Matches all @{name} or @name occurrences
+    matches = re.findall(r'(?:^|\s)@(?:\{([a-zA-Z0-9_-]+)\}|([a-zA-Z0-9_-]+))', message)
+    servers = []
+    for match in matches:
+        name = match[0] or match[1]
+        if name:
+            servers.append(name.lower())
+    # Return deduplicated list while preserving order
+    seen = set()
+    result = []
+    for server in servers:
+        if server not in seen:
+            seen.add(server)
+            result.append(server)
+    return result
+
 # Singleton instance
 connection_manager = GlobalConnectionManager()

@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import mcp.types as types
 import asyncio
 
-from .mcp_client import connection_manager, parse_server_route
+from .mcp_client import connection_manager, parse_server_route, parse_all_server_routes
 from .llm_service import query_llm, parse_llm_response
 
 app = FastAPI()
@@ -180,12 +180,16 @@ async def chat(request: ChatRequest, req: Request):
     # 1. Smart Routing
     # Check for @server_name syntax to filter tools
     target_server = parse_server_route(user_message)
+    all_target_servers = parse_all_server_routes(user_message)
     if target_server:
         print(f"DEBUG: Smart Routing detected target server: '{target_server}'")
+    if len(all_target_servers) > 1:
+        print(f"DEBUG: Multiple servers detected: {all_target_servers}")
     
     # 2. Tool Discovery (varies by lab mode)
     # STRATEGY: User-Driven Selection
     # We ONLY load tools if the user explicitly targets a server (e.g. @fabricstudio).
+    # If multiple servers are mentioned, load tools from all of them.
     # Otherwise, we provide NO tools (except maybe shell/system if we decide later), 
     # but we DO provide a list of available servers so the LLM can guide the user.
     
@@ -193,7 +197,21 @@ async def chat(request: ChatRequest, req: Request):
     available_servers = list(connection_manager.connections.keys())
     agent_mode = getattr(connection_manager, "agent_mode", "defender")
     
-    if target_server:
+    # If multiple servers mentioned, load tools from all of them
+    if len(all_target_servers) > 1:
+        print(f"DEBUG: Loading tools for multiple servers: {all_target_servers}")
+        for server in all_target_servers:
+            if agent_mode == "defender" and server == "shell":
+                continue  # Skip shell in defender mode
+            if server == "shell" and agent_mode == "naive":
+                continue  # Shell handled separately below
+            try:
+                server_tools = await connection_manager.list_tools(server)
+                tools.extend(server_tools)
+                print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
+            except Exception as e:
+                print(f"Error loading tools for {server}: {e}")
+    elif target_server:
         # Defender mode: explicitly block local shell tool execution.
         if agent_mode == "defender" and target_server == "shell":
             return {
