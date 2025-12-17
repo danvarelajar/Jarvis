@@ -340,6 +340,18 @@ async def chat(request: ChatRequest, req: Request):
             requested_tool_name = tool_call.tool
             tool_def = next((t for t in tools if t.get("name", "").lower() == requested_tool_name.lower()), None)
             canonical_tool_name = tool_def["name"] if tool_def else requested_tool_name
+            
+            # If the model tries to call an un-namespaced tool (e.g. "simulate_tool_injection")
+            # but we only advertised namespaced tools (e.g. "Booking__simulate_tool_injection"),
+            # find the best match so we can still validate against the real inputSchema.
+            if not tool_def and tools and "__" not in requested_tool_name:
+                suffix_match = next(
+                    (t for t in tools if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
+                    None
+                )
+                if suffix_match:
+                    tool_def = suffix_match
+                    canonical_tool_name = suffix_match.get("name") or canonical_tool_name
 
             # Prevent infinite loops: Check if we already called this tool with these args
             # We need to serialize args to check for equality
@@ -405,6 +417,25 @@ async def chat(request: ChatRequest, req: Request):
                     input_schema = tool_def.get('inputSchema', {})
                     required_args = input_schema.get('required', [])
                     allowed_args = input_schema.get('properties', {}).keys()
+                    
+                    # Compatibility: some lab tools have evolved arg names over time (e.g. "text" vs "untrustedText").
+                    # If the schema requires one but the model provided the other, auto-alias to the required name.
+                    try:
+                        if (
+                            "untrustedText" in required_args
+                            and "untrustedText" not in tool_call.arguments
+                            and "text" in tool_call.arguments
+                        ):
+                            tool_call.arguments["untrustedText"] = tool_call.arguments.pop("text")
+                        elif (
+                            "text" in required_args
+                            and "text" not in tool_call.arguments
+                            and "untrustedText" in tool_call.arguments
+                        ):
+                            tool_call.arguments["text"] = tool_call.arguments.pop("untrustedText")
+                    except Exception:
+                        # If arguments aren't a mutable mapping for any reason, skip aliasing.
+                        pass
                     
                     # Check for missing required args
                     missing_args = [arg for arg in required_args if arg not in tool_call.arguments or tool_call.arguments[arg] in (None, "")]
@@ -475,6 +506,41 @@ async def chat(request: ChatRequest, req: Request):
                 if len(tool_output) > MAX_TOOL_OUTPUT:
                     tool_output = tool_output[:MAX_TOOL_OUTPUT] + f"\n... (truncated, {len(tool_output) - MAX_TOOL_OUTPUT} chars omitted). Warning: Some data is missing."
                 
+                # If the user asked to run the simulator, don't let the agent loop by
+                # repeatedly re-simulating on the simulator's own output. In Defender
+                # mode, return a direct, human-friendly summary immediately.
+                if agent_mode == "defender" and real_tool_name == "simulate_tool_injection":
+                    try:
+                        parsed = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                    except Exception:
+                        parsed = None
+                    
+                    if isinstance(parsed, dict):
+                        analysis = parsed.get("analysis") or {}
+                        naive = parsed.get("naiveAgent") or {}
+                        safe = parsed.get("safeAgent") or {}
+                        risk = analysis.get("risk", "unknown")
+                        hits = analysis.get("hits") or []
+                        guidance = analysis.get("guidance") or []
+                        
+                        lines = []
+                        lines.append(f"Simulator risk: {risk}")
+                        lines.append(f"Hits: {', '.join(hits) if hits else '(none)'}")
+                        if isinstance(naive, dict) and "wouldAttemptToolCall" in naive:
+                            lines.append(f"Naive agent wouldAttemptToolCall: {naive.get('wouldAttemptToolCall')}")
+                        if isinstance(safe, dict) and safe.get("note"):
+                            lines.append(f"Safe-agent note: {safe.get('note')}")
+                        if guidance:
+                            # Keep it compact; this is a lab helper, not a lecture.
+                            lines.append("Guidance:")
+                            for g in guidance[:5]:
+                                lines.append(f"- {g}")
+                        
+                        return {"role": "assistant", "content": "\n".join(lines)}
+                    
+                    # Fallback: return raw simulator output if we can't parse it.
+                    return {"role": "assistant", "content": tool_output}
+
                 # Feed result back to LLM
                 print(f"[Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
                 if len(tool_output) < 200:
