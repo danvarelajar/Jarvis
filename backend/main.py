@@ -367,12 +367,16 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[DEBUG] No tools available for LLM")
         
         # Query LLM
+        # Enable Qwen RAG approach when using Ollama provider
+        use_qwen_rag = (connection_manager.llm_provider == "ollama")
+        
         response_content = await query_llm(
             current_messages, 
             tools, 
             api_key=api_key, 
             provider=connection_manager.llm_provider, 
-            model_url=connection_manager.ollama_url
+            model_url=connection_manager.ollama_url,
+            use_qwen_rag=use_qwen_rag
         )
         
         # Parse Response

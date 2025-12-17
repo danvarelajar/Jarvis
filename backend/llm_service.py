@@ -1,11 +1,31 @@
 import json
 import json
 from pydantic import BaseModel, ValidationError
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+import re
 
 class ToolCall(BaseModel):
     tool: str
     arguments: Dict[str, Any]
+
+# Fixed system prompt for MCP router/caller role (never changes)
+MCP_ROUTER_SYSTEM_PROMPT = """You are an MCP router and caller. Your role is to:
+
+1. Receive tool definitions and a user request
+2. Choose the correct tool based on the user's intent
+3. Extract parameters from the user's request
+4. Output ONLY valid JSON in this exact format: {"tool": "tool_name", "arguments": {"key": "value"}}
+
+RULES:
+- Output ONLY the JSON tool call. No text before or after.
+- Use the EXACT tool name as provided in the MCP tool documentation.
+- Extract all required parameters from the user's request.
+- If a required parameter is missing, output JSON with empty string or null for that parameter (the system will handle validation).
+- Do NOT explain, do NOT chat, do NOT add commentary. Just output the JSON.
+
+OUTPUT FORMAT:
+{"tool": "exact_tool_name", "arguments": {"param1": "value1", "param2": "value2"}}
+"""
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
 YOUR GOAL: Execute the user's intent as EFFICIENTLY as possible.
@@ -44,9 +64,75 @@ Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.
 
 import httpx
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str) -> str:
+def retrieve_relevant_tools(user_query: str, all_tools: List[dict], top_k: int = 5) -> List[dict]:
+    """
+    Tiny RAG: Retrieve the most relevant tools based on user query.
+    Uses simple keyword matching and scoring.
+    
+    Args:
+        user_query: The user's natural language request
+        all_tools: List of all available tool definitions
+        top_k: Number of top tools to return
+    
+    Returns:
+        List of top-k most relevant tools
+    """
+    if not all_tools:
+        return []
+    
+    # Extract keywords from user query (simple tokenization)
+    query_lower = user_query.lower()
+    query_words = set(re.findall(r'\b\w+\b', query_lower))
+    
+    # Score each tool based on keyword matches
+    scored_tools = []
+    for tool in all_tools:
+        score = 0
+        
+        # Get tool text to search
+        tool_name = (tool.get("name") or "").lower()
+        tool_desc = (tool.get("description") or "").lower()
+        
+        # Check inputSchema properties and descriptions
+        input_schema = tool.get("inputSchema", {})
+        properties = input_schema.get("properties", {})
+        schema_text = json.dumps(properties).lower()
+        
+        # Combine all searchable text
+        searchable_text = f"{tool_name} {tool_desc} {schema_text}"
+        searchable_words = set(re.findall(r'\b\w+\b', searchable_text))
+        
+        # Score based on:
+        # 1. Exact tool name match (highest weight)
+        if any(word in tool_name for word in query_words):
+            score += 10
+        
+        # 2. Description matches
+        for word in query_words:
+            if word in tool_desc:
+                score += 3
+            if word in schema_text:
+                score += 2
+        
+        # 3. Word overlap
+        overlap = len(query_words & searchable_words)
+        score += overlap
+        
+        scored_tools.append((score, tool))
+    
+    # Sort by score (descending) and return top-k
+    scored_tools.sort(key=lambda x: x[0], reverse=True)
+    return [tool for _, tool in scored_tools[:top_k]]
+
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b") -> str:
     """
     Queries a local Ollama instance.
+    
+    Args:
+        messages: List of message dicts
+        system_prompt: System prompt to use
+        model_url: Ollama server URL
+        model_name: Model name to use (default: qwen3:8b for Qwen RAG approach)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
@@ -72,6 +158,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str) -> st
          pass 
 
     print(f"DEBUG: Ollama System Prompt Length: {len(final_system_prompt)}")
+    print(f"DEBUG: Using Ollama model: {model_name}")
     
     ollama_messages = [{"role": "system", "content": final_system_prompt}]
     
@@ -82,7 +169,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str) -> st
         ollama_messages.append({"role": role, "content": msg["content"]})
         
     payload = {
-        "model": "mcp-tool-executor", # User specified model name
+        "model": model_name,
         "messages": ollama_messages,
         "stream": False,
         "options": {
@@ -112,28 +199,68 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None) -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, use_qwen_rag: bool = False) -> str:
     """
     Queries the selected LLM provider.
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        tools: List of tool definitions
+        api_key: API key for providers that need it
+        provider: 'openai' or 'ollama'
+        model_url: URL for Ollama instance
+        use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
     """
     global LAST_REQUEST_TIME
     
-    # Construct the full prompt including system instructions
+    # Dispatch based on provider
+    if provider == "ollama":
+        if use_qwen_rag and tools:
+            # New Qwen RAG approach:
+            # 1. Fixed system prompt (MCP_ROUTER_SYSTEM_PROMPT)
+            # 2. Retrieve relevant tools using RAG
+            # 3. Build context with retrieved tools
+            # 4. Send to Qwen
+            
+            # Get user query from last message
+            user_query = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    user_query = msg.get("content", "")
+                    break
+            
+            # Retrieve top-k relevant tools
+            relevant_tools = retrieve_relevant_tools(user_query, tools, top_k=5)
+            
+            # Build context with retrieved tool documentation
+            tool_context = "## MCP TOOL DOCUMENTATION:\n\n"
+            if relevant_tools:
+                for tool in relevant_tools:
+                    tool_context += f"Tool: {tool.get('name', 'unknown')}\n"
+                    tool_context += f"Description: {tool.get('description', 'No description')}\n"
+                    tool_context += f"Input Schema: {json.dumps(tool.get('inputSchema', {}), indent=2)}\n\n"
+            else:
+                # Fallback: include all tools if RAG found nothing
+                tool_context += json.dumps(tools, indent=2)
+            
+            # Build final system prompt: fixed instructions + tool context
+            qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n\n{tool_context}\n\nRemember: Output ONLY the JSON tool call, nothing else."
+            
+            return await query_ollama(messages, qwen_system_prompt, model_url, model_name="qwen3:8b")
+        else:
+            # Legacy Ollama approach
+            ollama_system_prompt = SYSTEM_PROMPT
+            if tools:
+                tool_descriptions = json.dumps(tools, indent=2)
+                ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+            
+            return await query_ollama(messages, ollama_system_prompt, model_url, model_name="mcp-tool-executor")
+
+    # Construct the full prompt including system instructions (for OpenAI)
     current_system_prompt = SYSTEM_PROMPT
     if tools:
         tool_descriptions = json.dumps(tools, indent=2)
         current_system_prompt += f"\n\nAvailable Tools:\n{tool_descriptions}"
-
-    # Dispatch based on provider
-    # Dispatch based on provider
-    if provider == "ollama":
-        # For Ollama, we want to construct the prompt differently to be very explicit
-        ollama_system_prompt = SYSTEM_PROMPT
-        if tools:
-            tool_descriptions = json.dumps(tools, indent=2)
-            ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
-            
-        return await query_ollama(messages, ollama_system_prompt, model_url)
 
     if provider == "openai":
         from openai import AsyncOpenAI
