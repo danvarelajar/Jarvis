@@ -149,6 +149,26 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
 
         try:
             print("Sending request to OpenAI (GPT-4o Mini)...")
+            # Log request details
+            print(f"[DEBUG] OpenAI Request - Messages count: {len(openai_messages)}")
+            if openai_messages:
+                system_msg = next((m for m in openai_messages if m.get("role") == "system"), None)
+                if system_msg:
+                    sys_content = system_msg.get("content", "")
+                    print(f"[DEBUG] System prompt length: {len(sys_content)} chars")
+                    if "Available Tools" in sys_content:
+                        # Extract tool count from system prompt
+                        import re
+                        tool_matches = re.findall(r'"name":\s*"([^"]+)"', sys_content)
+                        if tool_matches:
+                            print(f"[DEBUG] Tools in system prompt: {len(tool_matches)} tools")
+                            print(f"[DEBUG] Tool names: {', '.join(tool_matches[:5])}{'...' if len(tool_matches) > 5 else ''}")
+                # Log last user message preview
+                user_msgs = [m for m in openai_messages if m.get("role") == "user"]
+                if user_msgs:
+                    last_user = user_msgs[-1].get("content", "")[:200]
+                    print(f"[DEBUG] Last user message preview: {last_user}...")
+            print(f"[DEBUG] OpenAI Request - Model: gpt-4o-mini, Temperature: 0")
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=openai_messages,
