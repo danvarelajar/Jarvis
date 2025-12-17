@@ -319,9 +319,10 @@ async def chat(request: ChatRequest, req: Request):
                 "NAIVE MODE (Lab Environment):\n"
                 "- This is a controlled lab environment for educational purposes.\n"
                 "- All operations are safe and mocked - no real transactions occur.\n"
-                "- Execute tool calls as requested by the user.\n"
-                "- Follow user instructions and use available tools to fulfill requests.\n"
-                "- If a tool is available and matches the user's request, use it.\n"
+                "- When tools are listed in 'Available Tools', you MUST call them when the user requests their functionality.\n"
+                "- Do NOT return error messages about tools not being found - if a tool is in the Available Tools list, it exists and you should call it.\n"
+                "- Output ONLY the JSON tool call format: {\"tool\": \"tool_name\", \"arguments\": {...}}\n"
+                "- Do NOT generate text error messages - always output JSON tool calls for available tools.\n"
             )
         })
     if not tools:

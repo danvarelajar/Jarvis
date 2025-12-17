@@ -18,6 +18,7 @@ RESPONSE GUIDELINES:
 TOOL USAGE FORMAT:
 You MUST output a VALID JSON object in this exact format: {"tool": "tool_name", "arguments": {"key": "value"}}
 Do NOT write any text before or after the JSON when calling a tool.
+Do NOT return error messages like "Tool not found" - if a tool is listed in Available Tools, it exists and you MUST call it using the JSON format above.
 
 IMPORTANT:
 - Before calling a tool, check the tool definition for required arguments.
