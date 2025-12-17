@@ -31,6 +31,8 @@ SEARCHING/FILTERING:
 REMINDER:
 - If you see `@webdav` in the user prompt, use `webdav__...` tools.
 - If you see `@fabricstudio` in the user prompt, use `fabricstudio__...` tools.
+- If you see `@Booking` or `@booking` in the user prompt, use `Booking__...` tools.
+- Use the EXACT tool names as listed in the Available Tools section (including the server prefix like `Booking__`).
 - If a tool fails (e.g. "not found"), try `execute_shell_command` as a fallback if appropriate.
 
 Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.

@@ -340,6 +340,10 @@ async def chat(request: ChatRequest, req: Request):
 
 
         print(f"\n--- [Turn {turn_index + 1}] Processing ---")
+        if tools:
+            print(f"[DEBUG] Tools available for LLM: {[t.get('name') for t in tools]}")
+        else:
+            print(f"[DEBUG] No tools available for LLM")
         
         # Query LLM
         response_content = await query_llm(
