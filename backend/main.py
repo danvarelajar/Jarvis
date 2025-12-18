@@ -196,6 +196,71 @@ async def update_config(request: ConfigRequest):
 async def health_check():
     return {"status": "ok"}
 
+@app.post("/api/ollama/preload")
+async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
+    """
+    Preloads an Ollama model into memory to avoid cold-start delays.
+    Uses keep_alive=-1 to keep the model loaded indefinitely.
+    """
+    import httpx
+    
+    request_start = time.time()
+    print(f"[{get_timestamp()}] [API] POST /api/ollama/preload request received")
+    
+    # Use provided URL or fall back to configured URL
+    url = ollama_url or connection_manager.ollama_url
+    if not url:
+        print(f"[{get_timestamp()}] [API] Error: Ollama URL is not configured")
+        return {"error": "Ollama URL is not configured"}
+    
+    # Use provided model name or fall back to configured model
+    model = model_name or getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+    
+    # Ensure URL doesn't have /api/chat suffix
+    base_url = url
+    if base_url.endswith("/api/chat"):
+        base_url = base_url[:-9]
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    
+    # Ollama API endpoint for generating (used to preload)
+    api_endpoint = f"{base_url}/api/generate"
+    print(f"[{get_timestamp()}] [API] Preloading model '{model}' from: {api_endpoint}")
+    
+    try:
+        timeout = httpx.Timeout(300.0, connect=10.0)  # Allow time for model loading
+        http_start = time.time()
+        print(f"[{get_timestamp()}] [API] Sending preload request...")
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # Send a minimal request with keep_alive=-1 to keep model in memory indefinitely
+            payload = {
+                "model": model,
+                "prompt": "",  # Empty prompt just to load the model
+                "keep_alive": -1  # Keep model in memory indefinitely
+            }
+            response = await client.post(api_endpoint, json=payload)
+            http_time = time.time() - http_start
+            print(f"[{get_timestamp()}] [API] Preload response received ({format_duration(http_start)}), status: {response.status_code}")
+            
+            response.raise_for_status()
+            
+            total_time = time.time() - request_start
+            print(f"[{get_timestamp()}] [API] Model '{model}' preloaded successfully (total: {format_duration(request_start)})")
+            
+            return {
+                "success": True,
+                "model": model,
+                "message": f"Model '{model}' has been preloaded and will stay in memory",
+                "preload_time": total_time
+            }
+    except httpx.HTTPStatusError as e:
+        error_body = e.response.text if hasattr(e.response, 'text') else str(e)
+        print(f"[{get_timestamp()}] [API] Ollama HTTP Error during preload: {error_body}")
+        return {"success": False, "error": f"Ollama HTTP Error: {error_body}"}
+    except Exception as e:
+        print(f"[{get_timestamp()}] [API] Error preloading model: {str(e)}")
+        return {"success": False, "error": f"Error preloading model: {str(e)}"}
+
 @app.get("/api/ollama/models")
 async def get_ollama_models(ollama_url: str = None):
     """
@@ -282,15 +347,45 @@ async def chat(request: ChatRequest, req: Request):
     request_start = time.time()
     print(f"[{get_timestamp()}] [REQUEST] Chat request received")
     
+    # Log request details immediately
+    try:
+        messages_count = len(request.messages) if request.messages else 0
+        print(f"[{get_timestamp()}] [REQUEST] Messages in request: {messages_count}")
+        if messages_count > 0:
+            last_message = request.messages[-1]
+            print(f"[{get_timestamp()}] [REQUEST] Last message keys: {list(last_message.keys()) if isinstance(last_message, dict) else 'not a dict'}")
+    except Exception as e:
+        print(f"[{get_timestamp()}] [REQUEST] Error inspecting request: {e}")
+    
     # Reload config to ensure we have the latest model name
     config_start = time.time()
     await connection_manager.load_config()
     print(f"[{get_timestamp()}] [REQUEST] Config reloaded ({format_duration(config_start)})")
     
-    user_message = request.messages[-1]["content"]
-    # Log the user message (truncate if too long for readability)
-    message_preview = user_message[:200] + "..." if len(user_message) > 200 else user_message
-    print(f"[{get_timestamp()}] [REQUEST] User message: {message_preview}")
+    # Extract user message with error handling
+    try:
+        if not request.messages or len(request.messages) == 0:
+            print(f"[{get_timestamp()}] [REQUEST] ERROR: No messages in request")
+            return {"role": "assistant", "content": "Error: No messages provided in request"}
+        
+        last_msg = request.messages[-1]
+        if not isinstance(last_msg, dict):
+            print(f"[{get_timestamp()}] [REQUEST] ERROR: Last message is not a dict: {type(last_msg)}")
+            return {"role": "assistant", "content": "Error: Invalid message format"}
+        
+        user_message = last_msg.get("content", "")
+        if not user_message:
+            print(f"[{get_timestamp()}] [REQUEST] ERROR: No 'content' in last message. Keys: {list(last_msg.keys())}")
+            return {"role": "assistant", "content": "Error: No content in message"}
+        
+        # Log the user message (truncate if too long for readability)
+        message_preview = user_message[:200] + "..." if len(user_message) > 200 else user_message
+        print(f"[{get_timestamp()}] [REQUEST] User message: {message_preview}")
+    except Exception as e:
+        print(f"[{get_timestamp()}] [REQUEST] ERROR extracting user message: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"role": "assistant", "content": f"Error processing request: {str(e)}"}
     # Determine API Key based on provider
     provider = connection_manager.llm_provider
     api_key = None

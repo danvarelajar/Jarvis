@@ -276,9 +276,18 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             # Track actual HTTP request time
             http_start = time.time()
             print(f"[{get_timestamp()}] [LLM] HTTP POST request initiated...")
+            print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
             response = await client.post(api_endpoint, json=payload)
             http_time = time.time() - http_start
             print(f"[{get_timestamp()}] [LLM] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
+            
+            # Performance analysis
+            if http_time > 60:
+                print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s - model may be loading from disk or underpowered")
+            elif http_time > 30:
+                print(f"[{get_timestamp()}] [LLM] ⚠️  MODERATE: Inference took {http_time:.1f}s - consider model preloading")
+            else:
+                print(f"[{get_timestamp()}] [LLM] ✓ Inference completed in {http_time:.1f}s")
             
             response.raise_for_status()
             
