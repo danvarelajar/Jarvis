@@ -288,6 +288,9 @@ async def chat(request: ChatRequest, req: Request):
     print(f"[{get_timestamp()}] [REQUEST] Config reloaded ({format_duration(config_start)})")
     
     user_message = request.messages[-1]["content"]
+    # Log the user message (truncate if too long for readability)
+    message_preview = user_message[:200] + "..." if len(user_message) > 200 else user_message
+    print(f"[{get_timestamp()}] [REQUEST] User message: {message_preview}")
     # Determine API Key based on provider
     provider = connection_manager.llm_provider
     api_key = None
