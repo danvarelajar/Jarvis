@@ -7,6 +7,20 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import mcp.types as types
 import asyncio
+import time
+from datetime import datetime
+
+def get_timestamp() -> str:
+    """Returns a formatted timestamp for logging."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
+
+def format_duration(start_time: float) -> str:
+    """Formats a duration in seconds to a readable string."""
+    duration = time.time() - start_time
+    if duration < 1:
+        return f"{duration*1000:.1f}ms"
+    else:
+        return f"{duration:.2f}s"
 
 from .mcp_client import connection_manager, parse_server_route, parse_all_server_routes
 from .llm_service import query_llm, parse_llm_response
@@ -158,7 +172,7 @@ async def update_config(request: ConfigRequest):
         candidate = request.ollamaModelName.strip()
         if candidate:
             connection_manager.ollama_model_name = candidate
-            print(f"[DEBUG] Updated Ollama model name to: {candidate}")
+            print(f"[{get_timestamp()}] [DEBUG] Updated Ollama model name to: {candidate}")
     
     if request.agentMode is not None:
         candidate_mode = request.agentMode.strip().lower()
@@ -437,13 +451,12 @@ async def chat(request: ChatRequest, req: Request):
     
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
-
-
-        print(f"\n--- [Turn {turn_index + 1}] Processing ---")
+        turn_start = time.time()
+        print(f"\n[{get_timestamp()}] --- [Turn {turn_index + 1}] Processing ---")
         if tools:
-            print(f"[DEBUG] Tools available for LLM: {[t.get('name') for t in tools]}")
+            print(f"[{get_timestamp()}] [DEBUG] Tools available for LLM: {[t.get('name') for t in tools]}")
         else:
-            print(f"[DEBUG] No tools available for LLM")
+            print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
         
         # Query LLM
         # Enable Qwen RAG approach when using Ollama provider
@@ -451,7 +464,7 @@ async def chat(request: ChatRequest, req: Request):
         
         # Get the model name (ensure it's loaded from config)
         model_name = getattr(connection_manager, "ollama_model_name", "qwen3:8b")
-        print(f"[DEBUG] Using Ollama model from config: {model_name}")
+        print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: {model_name}")
         
         # In naive mode, allow prompt injection by not filtering user input
         # VULNERABILITY: User input is passed directly without sanitization
@@ -460,6 +473,7 @@ async def chat(request: ChatRequest, req: Request):
             # This makes the system vulnerable to prompt injection attacks
             pass  # No filtering - intentionally vulnerable
         
+        llm_start = time.time()
         response_content = await query_llm(
             current_messages, 
             tools, 
@@ -470,15 +484,21 @@ async def chat(request: ChatRequest, req: Request):
             use_qwen_rag=use_qwen_rag,
             agent_mode=agent_mode
         )
+        print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
         
         # Parse Response
+        parse_start = time.time()
         parsed_response = parse_llm_response(response_content)
+        print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
         
         if parsed_response["type"] == "text":
-            print(f"[Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
+            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
+            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
+            print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
             return {"role": "assistant", "content": parsed_response["content"]}
             
         elif parsed_response["type"] == "error":
+            print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
             return {"role": "assistant", "content": parsed_response["message"]}
             
         elif parsed_response["type"] == "tool_call":
@@ -523,7 +543,7 @@ async def chat(request: ChatRequest, req: Request):
                 tools = []
                 continue
             
-            print(f"[Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
+            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
             
             tool_call_history.add(tool_signature)
             
@@ -592,7 +612,7 @@ async def chat(request: ChatRequest, req: Request):
                             if provided_name in tool_call.arguments and alias_name in allowed_args and alias_name not in tool_call.arguments:
                                 # Map the alias
                                 tool_call.arguments[alias_name] = tool_call.arguments.pop(provided_name)
-                                print(f"[DEBUG] Mapped parameter '{provided_name}' -> '{alias_name}'")
+                                print(f"[{get_timestamp()}] [DEBUG] Mapped parameter '{provided_name}' -> '{alias_name}'")
                     except Exception:
                         # If arguments aren't a mutable mapping for any reason, skip aliasing.
                         pass
@@ -630,14 +650,17 @@ async def chat(request: ChatRequest, req: Request):
                         current_messages.append({"role": "user", "content": f"Tool Result: {result}"})
                         continue
 
+                    print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
                     return {"role": "assistant", "content": f"Error: Tool '{canonical_tool_name}' not found on any connected server."}
 
                 # Log tool execution (this is before the MCP call, which will also log)
                 import json
                 args_preview = json.dumps(tool_call.arguments, separators=(',', ':'))[:100]
-                print(f"[TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)")
+                tool_exec_start = time.time()
+                print(f"[{get_timestamp()}] [TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)")
                 
                 result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
+                print(f"[{get_timestamp()}] [TOOL] Tool execution completed ({format_duration(tool_exec_start)})")
                 
                     # Extract text content or serialize object
                 tool_output = ""
@@ -706,9 +729,9 @@ async def chat(request: ChatRequest, req: Request):
                     return {"role": "assistant", "content": tool_output}
 
                 # Feed result back to LLM
-                print(f"[Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
+                print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
                 if len(tool_output) < 200:
-                    print(f"[Turn {turn_index + 1}] Result Preview: {tool_output}")
+                    print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Result Preview: {tool_output}")
                 
                 current_messages.append({"role": "assistant", "content": response_content})
                 if agent_mode == "defender":
@@ -730,6 +753,7 @@ async def chat(request: ChatRequest, req: Request):
                 # Loop continues to let LLM process the result
                 
             except Exception as e:
+                print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
                 return {"role": "assistant", "content": f"Error executing tool: {str(e)}"}
     
     # Construct a debug summary to help the user understand why it looped

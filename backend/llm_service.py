@@ -5,6 +5,19 @@ from typing import Optional, Dict, Any, List
 import re
 from datetime import datetime
 import subprocess
+import time
+
+def get_timestamp() -> str:
+    """Returns a formatted timestamp for logging."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
+
+def format_duration(start_time: float) -> str:
+    """Formats a duration in seconds to a readable string."""
+    duration = time.time() - start_time
+    if duration < 1:
+        return f"{duration*1000:.1f}ms"
+    else:
+        return f"{duration:.2f}s"
 
 class ToolCall(BaseModel):
     tool: str
@@ -221,8 +234,8 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
          # Need to be able to pass tools to formatting
          pass 
 
-    print(f"DEBUG: Ollama System Prompt Length: {len(final_system_prompt)}")
-    print(f"DEBUG: Using Ollama model: {model_name}")
+    print(f"[{get_timestamp()}] DEBUG: Ollama System Prompt Length: {len(final_system_prompt)}")
+    print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
     
     ollama_messages = [{"role": "system", "content": final_system_prompt}]
     
@@ -244,10 +257,13 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     try:
         # Increase timeout to 300s (5 mins) because loading a model for the first time can be slow
         timeout = httpx.Timeout(300.0, connect=10.0)
+        request_start = time.time()
+        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama...")
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(api_endpoint, json=payload)
             response.raise_for_status()
             result = response.json()
+            print(f"[{get_timestamp()}] [LLM] Ollama response received ({format_duration(request_start)})")
             return result["message"]["content"]
     except httpx.HTTPStatusError as e:
         error_body = e.response.text
@@ -368,30 +384,31 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         try:
             print("Sending request to OpenAI (GPT-4o Mini)...")
             # Log request details
-            print(f"[DEBUG] OpenAI Request - Messages count: {len(openai_messages)}")
+            print(f"[{get_timestamp()}] [DEBUG] OpenAI Request - Messages count: {len(openai_messages)}")
             if openai_messages:
                 system_msg = next((m for m in openai_messages if m.get("role") == "system"), None)
                 if system_msg:
                     sys_content = system_msg.get("content", "")
-                    print(f"[DEBUG] System prompt length: {len(sys_content)} chars")
+                    print(f"[{get_timestamp()}] [DEBUG] System prompt length: {len(sys_content)} chars")
                     if "Available Tools" in sys_content:
                         # Extract tool count from system prompt
                         import re
                         tool_matches = re.findall(r'"name":\s*"([^"]+)"', sys_content)
                         if tool_matches:
-                            print(f"[DEBUG] Tools in system prompt: {len(tool_matches)} tools")
-                            print(f"[DEBUG] Tool names: {', '.join(tool_matches[:5])}{'...' if len(tool_matches) > 5 else ''}")
+                            print(f"[{get_timestamp()}] [DEBUG] Tools in system prompt: {len(tool_matches)} tools")
+                            print(f"[{get_timestamp()}] [DEBUG] Tool names: {', '.join(tool_matches[:5])}{'...' if len(tool_matches) > 5 else ''}")
                 # Log last user message preview
                 user_msgs = [m for m in openai_messages if m.get("role") == "user"]
                 if user_msgs:
                     last_user = user_msgs[-1].get("content", "")[:200]
-                    print(f"[DEBUG] Last user message preview: {last_user}...")
-            print(f"[DEBUG] OpenAI Request - Model: gpt-4o-mini, Temperature: 0")
+                    print(f"[{get_timestamp()}] [DEBUG] Last user message preview: {last_user}...")
+            print(f"[{get_timestamp()}] [DEBUG] OpenAI Request - Model: gpt-4o-mini, Temperature: 0")
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=openai_messages,
                 temperature=0
             )
+            print(f"[{get_timestamp()}] [LLM] OpenAI response received ({format_duration(request_start)})")
             return response.choices[0].message.content
         except Exception as e:
             print(f"OpenAI Error: {e}")
@@ -403,7 +420,7 @@ def parse_llm_response(response_content: str) -> dict:
     Parses the LLM response. 
     Returns a dict with 'type': 'tool_call' or 'text', and relevant data.
     """
-    print(f"DEBUG: Raw LLM Response: {repr(response_content)}")
+    print(f"[{get_timestamp()}] DEBUG: Raw LLM Response: {repr(response_content)}")
     try:
         # Attempt to find JSON object using regex
         import re

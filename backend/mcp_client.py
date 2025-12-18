@@ -14,6 +14,19 @@ from mcp.types import CreateMessageResult
 from mcp.client.streamable_http import streamablehttp_client
 
 import time
+from datetime import datetime
+
+def get_timestamp() -> str:
+    """Returns a formatted timestamp for logging."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
+
+def format_duration(start_time: float) -> str:
+    """Formats a duration in seconds to a readable string."""
+    duration = time.time() - start_time
+    if duration < 1:
+        return f"{duration*1000:.1f}ms"
+    else:
+        return f"{duration:.2f}s"
 
 class PersistentConnection:
     def __init__(
@@ -60,10 +73,11 @@ class PersistentConnection:
                     async with streamablehttp_client(self.url, headers=self.headers) as (read, write, _):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"[MCP] [{self.display_name}] Connected via HTTP")
-                            print(f"[MCP] [{self.display_name}] Request: initialize()")
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Connected via HTTP")
+                            init_start = time.time()
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: initialize()")
                             await session.initialize()
-                            print(f"[MCP] [{self.display_name}] Response: initialize() -> success")
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: initialize() -> success ({format_duration(init_start)})")
                             
                             # Prefetch tools to populate cache
                             asyncio.create_task(self.get_tools())
@@ -100,10 +114,11 @@ class PersistentConnection:
                     async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"[MCP] [{self.display_name}] Connected via SSE")
-                            print(f"[MCP] [{self.display_name}] Request: initialize()")
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Connected via SSE")
+                            init_start = time.time()
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: initialize()")
                             await session.initialize()
-                            print(f"[MCP] [{self.display_name}] Response: initialize() -> success")
+                            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: initialize() -> success ({format_duration(init_start)})")
                             
                             # Prefetch tools to populate cache
                             asyncio.create_task(self.get_tools())
@@ -191,11 +206,12 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.tools_cache and (current_time - self.tools_cache_timestamp < self.CACHE_TTL):
-            print(f"[MCP] [{self.display_name}] Using cached tools ({len(self.tools_cache)} tools)")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Using cached tools ({len(self.tools_cache)} tools)")
             return self.tools_cache
             
         try:
-            print(f"[MCP] [{self.display_name}] Request: list_tools()")
+            list_start = time.time()
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools()")
             result = await self.session.list_tools()
             self.tools_cache = []
             for t in result.tools:
@@ -206,12 +222,12 @@ class PersistentConnection:
                 self.tools_cache.append(tool_dump)
                 
             self.tools_cache_timestamp = current_time
-            print(f"[MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})")
             return self.tools_cache
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"[MCP] [{self.display_name}] Error listing tools: {e}")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing tools: {e}")
             return []
 
     async def get_resources(self):
@@ -220,18 +236,19 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.resources_cache and (current_time - self.resources_cache_timestamp < self.CACHE_TTL):
-            print(f"[MCP] [{self.display_name}] Using cached resources ({len(self.resources_cache)} resources)")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Using cached resources ({len(self.resources_cache)} resources)")
             return self.resources_cache
             
         try:
-            print(f"[MCP] [{self.display_name}] Request: list_resources()")
+            list_start = time.time()
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_resources()")
             result = await self.session.list_resources()
             self.resources_cache = [r.model_dump() for r in result.resources]
             self.resources_cache_timestamp = current_time
-            print(f"[MCP] [{self.display_name}] Response: list_resources() -> {len(self.resources_cache)} resources")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_resources() -> {len(self.resources_cache)} resources ({format_duration(list_start)})")
             return self.resources_cache
         except Exception as e:
-            print(f"[MCP] [{self.display_name}] Error listing resources: {e}")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing resources: {e}")
             return []
 
     async def get_prompts(self):
@@ -240,18 +257,19 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.prompts_cache and (current_time - self.prompts_cache_timestamp < self.CACHE_TTL):
-            print(f"[MCP] [{self.display_name}] Using cached prompts ({len(self.prompts_cache)} prompts)")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Using cached prompts ({len(self.prompts_cache)} prompts)")
             return self.prompts_cache
             
         try:
-            print(f"[MCP] [{self.display_name}] Request: list_prompts()")
+            list_start = time.time()
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_prompts()")
             result = await self.session.list_prompts()
             self.prompts_cache = [p.model_dump() for p in result.prompts]
             self.prompts_cache_timestamp = current_time
-            print(f"[MCP] [{self.display_name}] Response: list_prompts() -> {len(self.prompts_cache)} prompts")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_prompts() -> {len(self.prompts_cache)} prompts ({format_duration(list_start)})")
             return self.prompts_cache
         except Exception as e:
-            print(f"[MCP] [{self.display_name}] Error listing prompts: {e}")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing prompts: {e}")
             return []
 
 import json
@@ -287,7 +305,7 @@ class GlobalConnectionManager:
         # But usually this is called at startup before adding servers.
 
     async def load_config(self):
-        print(f"[Jarvis] Using DATA_DIR={DATA_DIR}")
+        print(f"[{get_timestamp()}] [Jarvis] Using DATA_DIR={DATA_DIR}")
         if os.path.exists(CONFIG_FILE):
             try:
                 current_mtime = os.path.getmtime(CONFIG_FILE)
@@ -313,9 +331,9 @@ class GlobalConnectionManager:
                     for srv_name, details in servers_cfg.items():
                         hdrs = details.get("headers") or {}
                         hdr_keys = list(hdrs.keys()) if isinstance(hdrs, dict) else []
-                        print(f"[Jarvis] Config mcpServers[{srv_name}]: url={details.get('url')} transport={details.get('transport','sse')} headers={hdr_keys}")
+                        print(f"[{get_timestamp()}] [Jarvis] Config mcpServers[{srv_name}]: url={details.get('url')} transport={details.get('transport','sse')} headers={hdr_keys}")
                 except Exception as e:
-                    print(f"[Jarvis] Failed to print server config summary: {e}")
+                    print(f"[{get_timestamp()}] [Jarvis] Failed to print server config summary: {e}")
                 
                 # Load Global Settings - MOVED TO LLM_CONFIG_FILE
                 # self.llm_provider = config.get("llmProvider", "gemini")
@@ -341,7 +359,7 @@ class GlobalConnectionManager:
                         headers_changed = existing_conn.headers != new_headers
                         
                         if url_changed or transport_changed or headers_changed:
-                            print(f"[Jarvis] Server {name} config changed (url={url_changed}, transport={transport_changed}, headers={headers_changed}), reconnecting...")
+                            print(f"[{get_timestamp()}] [Jarvis] Server {name} config changed (url={url_changed}, transport={transport_changed}, headers={headers_changed}), reconnecting...")
                             await self.add_server(
                                 name, 
                                 details["url"], 
@@ -376,7 +394,7 @@ class GlobalConnectionManager:
             except Exception as e:
                 print(f"Failed to load config: {e}")
         else:
-            print(f"[Jarvis] MCP config not found at {CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [Jarvis] MCP config not found at {CONFIG_FILE}")
 
         # Load LLM Config
         if os.path.exists(LLM_CONFIG_FILE):
@@ -388,11 +406,11 @@ class GlobalConnectionManager:
                     self.ollama_model_name = llm_config.get("ollamaModelName", "qwen3:8b")
                     self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
-                print(f"[DEBUG] Loaded ollama_model_name: {self.ollama_model_name}")
+                print(f"[{get_timestamp()}] [DEBUG] Loaded ollama_model_name: {self.ollama_model_name}")
             except Exception as e:
                 print(f"Failed to load LLM config: {e}")
         else:
-            print(f"[Jarvis] LLM config not found at {LLM_CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [Jarvis] LLM config not found at {LLM_CONFIG_FILE}")
 
 
         # Load secrets
@@ -406,7 +424,7 @@ class GlobalConnectionManager:
             except Exception as e:
                 print(f"Failed to load secrets: {e}")
         else:
-            print(f"[Jarvis] Secrets not found at {SECRETS_FILE}")
+            print(f"[{get_timestamp()}] [Jarvis] Secrets not found at {SECRETS_FILE}")
 
     async def watch_config(self):
         print(f"Starting config watcher for {CONFIG_FILE}")
@@ -529,7 +547,8 @@ class GlobalConnectionManager:
         # Truncate long arguments for logging
         if len(args_str) > 200:
             args_str = args_str[:200] + "... (truncated)"
-        print(f"[MCP] [{conn.display_name}] Request: call_tool(tool='{tool_name}', arguments={args_str})")
+        call_start = time.time()
+        print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Request: call_tool(tool='{tool_name}', arguments={args_str})")
         
         try:
             result = await conn.session.call_tool(tool_name, arguments)
@@ -544,10 +563,10 @@ class GlobalConnectionManager:
             else:
                 result_summary = f"success (type: {type(result).__name__})"
             
-            print(f"[MCP] [{conn.display_name}] Response: call_tool('{tool_name}') -> {result_summary}")
+            print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Response: call_tool('{tool_name}') -> {result_summary} ({format_duration(call_start)})")
             return result
         except Exception as e:
-            print(f"[MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)}")
+            print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)} ({format_duration(call_start)})")
             raise
 
 # Smart Routing Logic
