@@ -387,6 +387,31 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[{get_timestamp()}] [REQUEST] ERROR: No 'content' in last message. Keys: {list(last_msg.keys())}")
             return {"role": "assistant", "content": "Error: No content in message"}
         
+        # Clean up user message - remove any console log artifacts that might have been copied
+        # Check if message looks like it contains console log text
+        if "[FRONTEND]" in user_message or "index-" in user_message:
+            print(f"[{get_timestamp()}] [REQUEST] ⚠️  WARNING: User message appears to contain console log text")
+            # Try to extract the actual message content
+            lines = user_message.split('\n')
+            actual_message = None
+            for line in lines:
+                if 'Message content:' in line:
+                    # Extract content after "Message content: "
+                    parts = line.split('Message content:')
+                    if len(parts) > 1:
+                        actual_message = parts[1].strip().strip('"').strip("'")
+                        break
+                elif line.strip() and not line.strip().startswith('[') and '@' in line:
+                    # Likely the actual message
+                    actual_message = line.strip()
+                    break
+            
+            if actual_message:
+                print(f"[{get_timestamp()}] [REQUEST] Extracted actual message: {actual_message}")
+                user_message = actual_message
+            else:
+                print(f"[{get_timestamp()}] [REQUEST] Could not extract message, using original")
+        
         # Log the user message (truncate if too long for readability)
         message_preview = user_message[:200] + "..." if len(user_message) > 200 else user_message
         print(f"[{get_timestamp()}] [REQUEST] User message: {message_preview}")
@@ -405,10 +430,11 @@ async def chat(request: ChatRequest, req: Request):
     # Check for @server_name syntax to filter tools
     target_server = parse_server_route(user_message)
     all_target_servers = parse_all_server_routes(user_message)
+    print(f"[{get_timestamp()}] [DEBUG] Smart Routing - target_server: {target_server}, all_target_servers: {all_target_servers}")
     if target_server:
-        print(f"DEBUG: Smart Routing detected target server: '{target_server}'")
+        print(f"[{get_timestamp()}] [DEBUG] Smart Routing detected target server: '{target_server}'")
     if len(all_target_servers) > 1:
-        print(f"DEBUG: Multiple servers detected: {all_target_servers}")
+        print(f"[{get_timestamp()}] [DEBUG] Multiple servers detected: {all_target_servers}")
     
     # 2. Tool Discovery (varies by lab mode)
     # STRATEGY: User-Driven Selection
@@ -732,17 +758,15 @@ async def chat(request: ChatRequest, req: Request):
                     # If the schema requires one but the model provided the other, auto-alias to the required name.
                     try:
                         # Common aliases for tool parameters
+                        # Map common natural language terms to schema-required parameter names
                         aliases = {
                             "text": "untrustedText",
                             "untrustedText": "text",
-                            "origin": "from",
-                            "from": "origin",
-                            "destination": "to",
-                            "to": "destination",
-                            "departure_date": "departDate",
-                            "departDate": "departure_date",
-                            "return_date": "returnDate",
-                            "returnDate": "return_date",
+                            "origin": "from",  # Model may use "origin" but schema requires "from"
+                            "destination": "to",  # Model may use "destination" but schema requires "to"
+                            "departure_date": "departDate",  # Model may use "departure_date" but schema requires "departDate"
+                            "return_date": "returnDate",  # Model may use "return_date" but schema requires "returnDate"
+                            "passenger_count": "passengers",  # Model may use "passenger_count" but schema requires "passengers"
                         }
                         
                         # Check for aliases and map them

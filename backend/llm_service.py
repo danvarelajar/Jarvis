@@ -386,9 +386,39 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             tool_context = "## MCP TOOL DOCUMENTATION:\n\n"
             if relevant_tools:
                 for tool in relevant_tools:
-                    tool_context += f"Tool: {tool.get('name', 'unknown')}\n"
-                    tool_context += f"Description: {tool.get('description', 'No description')}\n"
-                    tool_context += f"Input Schema: {json.dumps(tool.get('inputSchema', {}), indent=2)}\n\n"
+                    tool_name = tool.get('name', 'unknown')
+                    tool_context += f"### Tool: {tool_name}\n"
+                    tool_context += f"Description: {tool.get('description', 'No description')}\n\n"
+                    
+                    # Extract and format input schema with explicit parameter names
+                    input_schema = tool.get('inputSchema', {})
+                    properties = input_schema.get('properties', {})
+                    required = input_schema.get('required', [])
+                    
+                    tool_context += "**REQUIRED PARAMETERS (use EXACT names):**\n"
+                    for param_name in required:
+                        param_info = properties.get(param_name, {})
+                        param_type = param_info.get('type', 'string')
+                        param_desc = param_info.get('description', '')
+                        tool_context += f"  - `{param_name}` ({param_type}): {param_desc}\n"
+                    
+                    if properties:
+                        tool_context += "\n**ALL PARAMETERS (use EXACT names from this list):**\n"
+                        for param_name, param_info in properties.items():
+                            param_type = param_info.get('type', 'string')
+                            param_desc = param_info.get('description', '')
+                            is_required = param_name in required
+                            req_marker = " [REQUIRED]" if is_required else " [OPTIONAL]"
+                            tool_context += f"  - `{param_name}` ({param_type}){req_marker}: {param_desc}\n"
+                    
+                    tool_context += f"\n**Full Input Schema (JSON):**\n```json\n{json.dumps(input_schema, indent=2)}\n```\n\n"
+                    # List exact parameter names to emphasize
+                    exact_params = list(properties.keys())
+                    if exact_params:
+                        param_list = ", ".join([f"'{p}'" for p in exact_params[:5]])
+                        tool_context += f"**CRITICAL: Use EXACT parameter names from above. Do NOT use synonyms like 'origin'/'destination' - use the exact names: {param_list}**\n\n"
+                    else:
+                        tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms.**\n\n"
             else:
                 # Fallback: include all tools if RAG found nothing
                 if tools:
