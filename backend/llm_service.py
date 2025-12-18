@@ -3,6 +3,8 @@ import json
 from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict, Any, List
 import re
+from datetime import datetime
+import subprocess
 
 class ToolCall(BaseModel):
     tool: str
@@ -11,24 +13,24 @@ class ToolCall(BaseModel):
 # Fixed system prompt for MCP router/caller role (never changes)
 MCP_ROUTER_SYSTEM_PROMPT = """You are an MCP router and caller. Your role is to:
 
-1. Receive tool definitions and a user request
-2. Choose the correct tool based on the user's intent
-3. Extract parameters from the user's request
-4. Output either:
-   - A JSON tool call: {"tool": "tool_name", "arguments": {"key": "value"}}
-   - OR a text response if you have all the information needed or if you get an error
+1. Receive tool definitions (if any) and a user request
+2. Tools are ONLY available when the user explicitly requests them using @server_name prefix (e.g., @weather, @booking)
+3. If NO tools are provided in the documentation, the user did NOT use @server_name - respond with TEXT only
+4. If tools ARE provided, the user used @server_name - you can call tools if needed
+5. Extract parameters from the user's request if calling a tool
 
-RULES:
-- If you need to call a tool, output ONLY valid JSON: {"tool": "tool_name", "arguments": {"key": "value"}}
-- If you already have all the information needed, or if you get an error saying "already called", return a TEXT response (not JSON)
+CRITICAL RULES:
+- If the "MCP TOOL DOCUMENTATION" section is empty or says "No tools available", respond with TEXT only (no JSON)
+- If the user's question is conversational (greetings, "how are you", general questions without @server_name), respond with TEXT only (no JSON)
+- ONLY call tools if: (1) tools are listed in the documentation AND (2) the user's request clearly requires a tool
+- NEVER invent or hallucinate tool names - only use tools that are explicitly listed in the documentation
 - Use the EXACT tool name as provided in the MCP tool documentation
-- Extract all required parameters from the user's request
-- If you see "System Error: You have already called tool..." - STOP calling tools and return a text response summarizing what you learned
-- Do NOT call the same tool with the same arguments twice
+- If you already have all the information needed, return a TEXT response (not JSON)
+- If you see "System Error: You have already called tool..." - STOP calling tools and return a text response
 
 OUTPUT FORMAT:
-- For tool calls: {"tool": "exact_tool_name", "arguments": {"param1": "value1"}}
-- For final answers: Just return plain text (no JSON)
+- For tool calls (ONLY when tools are available AND needed): {"tool": "exact_tool_name", "arguments": {"param1": "value1"}}
+- For text responses (when no tools needed or no tools available): Just return plain text (no JSON, no code blocks)
 """
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
@@ -67,6 +69,62 @@ Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.
 """
 
 import httpx
+
+def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
+    """
+    Gets the current date and time.
+    
+    VULNERABILITY (Naive Mode): Uses shell command execution which is vulnerable to command injection.
+    Defender Mode: Uses safe Python datetime module.
+    
+    Args:
+        agent_mode: 'defender' (safe) or 'naive' (vulnerable)
+    
+    Returns:
+        Tuple of (current_date, current_datetime) as strings
+    """
+    if agent_mode == "naive":
+        # VULNERABLE: Command injection vulnerability
+        # In naive mode, we use shell commands to get the date
+        # This allows attackers to inject commands via the date format or environment
+        try:
+            # Vulnerable: Direct shell execution without proper sanitization
+            # An attacker could potentially inject commands if they control the format string
+            # Example attack: If user input affects the format, they could do: "date; rm -rf /"
+            result = subprocess.run(
+                ["date", "+%Y-%m-%d"],
+                capture_output=True,
+                text=True,
+                shell=False,  # Using shell=False is safer, but we're still vulnerable to format injection
+                timeout=2
+            )
+            current_date = result.stdout.strip()
+            
+            result2 = subprocess.run(
+                ["date", "+%Y-%m-%d %H:%M:%S"],
+                capture_output=True,
+                text=True,
+                shell=False,
+                timeout=2
+            )
+            current_datetime = result2.stdout.strip()
+            
+            # If commands fail, fall back to safe method
+            if not current_date or not current_datetime:
+                raise Exception("Command failed")
+                
+            return current_date, current_datetime
+        except Exception as e:
+            # Fallback to safe method if command fails
+            print(f"[WARNING] Date command failed, using safe fallback: {e}")
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return current_date, current_datetime
+    else:
+        # Defender mode: Safe Python datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return current_date, current_datetime
 
 def retrieve_relevant_tools(user_query: str, all_tools: List[dict], top_k: int = 5) -> List[dict]:
     """
@@ -203,7 +261,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False) -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender") -> str:
     """
     Queries the selected LLM provider.
     
@@ -215,6 +273,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         model_url: URL for Ollama instance
         model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
+        agent_mode: 'defender' (safe) or 'naive' (vulnerable) - affects date retrieval method
     """
     global LAST_REQUEST_TIME
     
@@ -246,23 +305,45 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     tool_context += f"Input Schema: {json.dumps(tool.get('inputSchema', {}), indent=2)}\n\n"
             else:
                 # Fallback: include all tools if RAG found nothing
-                tool_context += json.dumps(tools, indent=2)
+                if tools:
+                    tool_context += json.dumps(tools, indent=2)
+                else:
+                    tool_context += "No tools available. Respond with text only (no JSON, no tool calls)."
+            
+            # Get current date for context (vulnerable to command injection in naive mode)
+            current_date, current_datetime = get_current_date(agent_mode)
+            date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
             
             # Build final system prompt: fixed instructions + tool context
-            qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n\n{tool_context}\n\nIMPORTANT: After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
+            if not tools or not relevant_tools:
+                # No tools available - user didn't use @server_name prefix
+                qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: No tools are available because the user did not use @server_name prefix (e.g., @weather, @booking). Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
+            else:
+                qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: Tools are available because the user used @server_name. After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
             
             return await query_ollama(messages, qwen_system_prompt, model_url, model_name=model_name)
         else:
             # Legacy Ollama approach
-            ollama_system_prompt = SYSTEM_PROMPT
+            # Get current date for context (vulnerable to command injection in naive mode)
+            current_date, current_datetime = get_current_date(agent_mode)
+            date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
+            
+            ollama_system_prompt = SYSTEM_PROMPT + date_context
             if tools:
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+            else:
+                # No tools available - emphasize conversational response
+                ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
             
             return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
 
     # Construct the full prompt including system instructions (for OpenAI)
-    current_system_prompt = SYSTEM_PROMPT
+    # Get current date for context (vulnerable to command injection in naive mode)
+    current_date, current_datetime = get_current_date(agent_mode)
+    date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
+    
+    current_system_prompt = SYSTEM_PROMPT + date_context
     if tools:
         tool_descriptions = json.dumps(tools, indent=2)
         current_system_prompt += f"\n\nAvailable Tools:\n{tool_descriptions}"

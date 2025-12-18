@@ -329,15 +329,38 @@ class GlobalConnectionManager:
                 for name, details in config.get("mcpServers", {}).items():
                     normalized = (name or "").lower()
                     new_servers.add(normalized)
-                    # Check if update needed (simplest is to just re-add, which restarts)
-                    # or check if it's new
-                    await self.add_server(
-                        name, 
-                        details["url"], 
-                        details.get("headers"), 
-                        transport=details.get("transport", "sse"),
-                        save=False
-                    )
+                    
+                    # Check if server is already connected and active
+                    existing_conn = self.connections.get(normalized)
+                    if existing_conn and existing_conn.session:
+                        # Server is already connected and active - skip reconnection
+                        # Only reconnect if URL, transport, or headers changed
+                        url_changed = existing_conn.url != details["url"]
+                        transport_changed = existing_conn.transport != details.get("transport", "sse")
+                        new_headers = details.get("headers") or {}
+                        headers_changed = existing_conn.headers != new_headers
+                        
+                        if url_changed or transport_changed or headers_changed:
+                            print(f"[Jarvis] Server {name} config changed (url={url_changed}, transport={transport_changed}, headers={headers_changed}), reconnecting...")
+                            await self.add_server(
+                                name, 
+                                details["url"], 
+                                details.get("headers"), 
+                                transport=details.get("transport", "sse"),
+                                save=False
+                            )
+                        else:
+                            # Connection is active and config unchanged - skip reconnection
+                            pass  # No action needed
+                    else:
+                        # Server not connected or connection lost - connect it
+                        await self.add_server(
+                            name, 
+                            details["url"], 
+                            details.get("headers"), 
+                            transport=details.get("transport", "sse"),
+                            save=False
+                        )
                     
                 # 3. Remove servers that are no longer in config
                 to_remove = active_servers - new_servers
