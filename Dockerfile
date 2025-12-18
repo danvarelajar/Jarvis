@@ -33,5 +33,6 @@ VOLUME /app/data
 # Expose port
 EXPOSE 3000
 
-# Run the application
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "3000"]
+# Run the application with multiple workers to handle concurrent requests
+# This prevents new requests from being queued behind long-running Ollama inference
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "3000", "--workers", "4"]

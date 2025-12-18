@@ -60,9 +60,16 @@ function App() {
     }, []);
 
     // Fetch Ollama models when Ollama is selected or URL changes
+    // Use debouncing to avoid fetching on every keystroke
     useEffect(() => {
-        const fetchModels = async () => {
-            if (llmProvider === 'ollama' && ollamaUrl) {
+        // Only fetch if provider is ollama and URL is not empty
+        if (llmProvider !== 'ollama' || !ollamaUrl || ollamaUrl.trim() === '') {
+            return;
+        }
+
+        // Debounce: wait 500ms after last change before fetching
+        const timeoutId = setTimeout(() => {
+            const fetchModels = async () => {
                 setIsLoadingModels(true);
                 try {
                     const response = await fetch(`/api/ollama/models?ollama_url=${encodeURIComponent(ollamaUrl)}`);
@@ -82,10 +89,13 @@ function App() {
                 } finally {
                     setIsLoadingModels(false);
                 }
-            }
-        };
-        fetchModels();
-    }, [llmProvider, ollamaUrl]);
+            };
+            fetchModels();
+        }, 500); // Wait 500ms after user stops typing
+
+        // Cleanup: cancel the timeout if URL changes again before 500ms
+        return () => clearTimeout(timeoutId);
+    }, [llmProvider, ollamaUrl, ollamaModelName]);
 
     const sendMessage = async () => {
         if (!input.trim()) return;

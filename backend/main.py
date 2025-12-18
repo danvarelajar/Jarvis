@@ -344,8 +344,13 @@ async def get_ollama_models(ollama_url: str = None):
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req: Request):
+    # Log immediately when function is called (request arrived at FastAPI)
+    request_arrived_time = time.time()
+    request_arrived_timestamp = get_timestamp()
+    print(f"[{request_arrived_timestamp}] [REQUEST] ⚡ HTTP POST /api/chat arrived at FastAPI endpoint")
+    
     request_start = time.time()
-    print(f"[{get_timestamp()}] [REQUEST] Chat request received")
+    print(f"[{get_timestamp()}] [REQUEST] Chat request received - starting processing")
     
     # Log request details immediately
     try:
