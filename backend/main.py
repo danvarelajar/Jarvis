@@ -500,10 +500,12 @@ async def chat(request: ChatRequest, req: Request):
                 tool_call_history = set()
             
             if tool_signature in tool_call_history:
-                error_msg = f"System Error: You have already called tool '{tool_call.tool}' with these arguments. Do not call it again. Analyze the results you already have or ask the user for clarification."
+                error_msg = f"System Error: You have already called tool '{tool_call.tool}' with these arguments. STOP calling tools now. Return a TEXT response (not JSON) summarizing the information you have gathered from the previous tool calls."
                 print(f"Loop detected: {error_msg}")
                 current_messages.append({"role": "assistant", "content": response_content})
                 current_messages.append({"role": "user", "content": error_msg})
+                # Remove tools to force text response
+                tools = []
                 continue
             
             print(f"[Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
@@ -607,7 +609,11 @@ async def chat(request: ChatRequest, req: Request):
 
                     return {"role": "assistant", "content": f"Error: Tool '{canonical_tool_name}' not found on any connected server."}
 
-                print(f"Executing tool '{real_tool_name}' on server '{server_to_call}' with args: {tool_call.arguments}")
+                # Log tool execution (this is before the MCP call, which will also log)
+                import json
+                args_preview = json.dumps(tool_call.arguments, separators=(',', ':'))[:100]
+                print(f"[TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)")
+                
                 result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
                 
                     # Extract text content or serialize object
@@ -683,17 +689,20 @@ async def chat(request: ChatRequest, req: Request):
                 
                 current_messages.append({"role": "assistant", "content": response_content})
                 if agent_mode == "defender":
-                    current_messages.append({
-                        "role": "user",
-                        "content": (
-                            "UNTRUSTED_TOOL_RESULT_BEGIN\n"
-                            f"tool={canonical_tool_name}\n"
-                            f"{tool_output}\n"
-                            "UNTRUSTED_TOOL_RESULT_END"
-                        )
-                    })
+                    tool_result_msg = (
+                        "UNTRUSTED_TOOL_RESULT_BEGIN\n"
+                        f"tool={canonical_tool_name}\n"
+                        f"{tool_output}\n"
+                        "UNTRUSTED_TOOL_RESULT_END\n\n"
+                        "If you have enough information to answer the user's question, return a TEXT response (not JSON) summarizing the results. Only call another tool if you need more information."
+                    )
+                    current_messages.append({"role": "user", "content": tool_result_msg})
                 else:
-                    current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
+                    tool_result_msg = (
+                        f"Tool Result: {tool_output}\n\n"
+                        "If you have enough information to answer the user's question, return a TEXT response (not JSON) summarizing the results. Only call another tool if you need more information."
+                    )
+                    current_messages.append({"role": "user", "content": tool_result_msg})
                 
                 # Loop continues to let LLM process the result
                 

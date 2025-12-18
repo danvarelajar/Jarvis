@@ -14,17 +14,21 @@ MCP_ROUTER_SYSTEM_PROMPT = """You are an MCP router and caller. Your role is to:
 1. Receive tool definitions and a user request
 2. Choose the correct tool based on the user's intent
 3. Extract parameters from the user's request
-4. Output ONLY valid JSON in this exact format: {"tool": "tool_name", "arguments": {"key": "value"}}
+4. Output either:
+   - A JSON tool call: {"tool": "tool_name", "arguments": {"key": "value"}}
+   - OR a text response if you have all the information needed or if you get an error
 
 RULES:
-- Output ONLY the JSON tool call. No text before or after.
-- Use the EXACT tool name as provided in the MCP tool documentation.
-- Extract all required parameters from the user's request.
-- If a required parameter is missing, output JSON with empty string or null for that parameter (the system will handle validation).
-- Do NOT explain, do NOT chat, do NOT add commentary. Just output the JSON.
+- If you need to call a tool, output ONLY valid JSON: {"tool": "tool_name", "arguments": {"key": "value"}}
+- If you already have all the information needed, or if you get an error saying "already called", return a TEXT response (not JSON)
+- Use the EXACT tool name as provided in the MCP tool documentation
+- Extract all required parameters from the user's request
+- If you see "System Error: You have already called tool..." - STOP calling tools and return a text response summarizing what you learned
+- Do NOT call the same tool with the same arguments twice
 
 OUTPUT FORMAT:
-{"tool": "exact_tool_name", "arguments": {"param1": "value1", "param2": "value2"}}
+- For tool calls: {"tool": "exact_tool_name", "arguments": {"param1": "value1"}}
+- For final answers: Just return plain text (no JSON)
 """
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
@@ -245,7 +249,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 tool_context += json.dumps(tools, indent=2)
             
             # Build final system prompt: fixed instructions + tool context
-            qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n\n{tool_context}\n\nRemember: Output ONLY the JSON tool call, nothing else."
+            qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n\n{tool_context}\n\nIMPORTANT: After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
             
             return await query_ollama(messages, qwen_system_prompt, model_url, model_name=model_name)
         else:

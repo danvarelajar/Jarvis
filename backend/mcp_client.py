@@ -60,8 +60,10 @@ class PersistentConnection:
                     async with streamablehttp_client(self.url, headers=self.headers) as (read, write, _):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"Connected to {self.display_name} via HTTP")
+                            print(f"[MCP] [{self.display_name}] Connected via HTTP")
+                            print(f"[MCP] [{self.display_name}] Request: initialize()")
                             await session.initialize()
+                            print(f"[MCP] [{self.display_name}] Response: initialize() -> success")
                             
                             # Prefetch tools to populate cache
                             asyncio.create_task(self.get_tools())
@@ -98,8 +100,10 @@ class PersistentConnection:
                     async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
-                            print(f"Connected to {self.display_name} via SSE")
+                            print(f"[MCP] [{self.display_name}] Connected via SSE")
+                            print(f"[MCP] [{self.display_name}] Request: initialize()")
                             await session.initialize()
+                            print(f"[MCP] [{self.display_name}] Response: initialize() -> success")
                             
                             # Prefetch tools to populate cache
                             asyncio.create_task(self.get_tools())
@@ -187,9 +191,11 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.tools_cache and (current_time - self.tools_cache_timestamp < self.CACHE_TTL):
+            print(f"[MCP] [{self.display_name}] Using cached tools ({len(self.tools_cache)} tools)")
             return self.tools_cache
             
         try:
+            print(f"[MCP] [{self.display_name}] Request: list_tools()")
             result = await self.session.list_tools()
             self.tools_cache = []
             for t in result.tools:
@@ -200,11 +206,12 @@ class PersistentConnection:
                 self.tools_cache.append(tool_dump)
                 
             self.tools_cache_timestamp = current_time
+            print(f"[MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools")
             return self.tools_cache
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"Error listing tools for {self.server_name}: {e}")
+            print(f"[MCP] [{self.display_name}] Error listing tools: {e}")
             return []
 
     async def get_resources(self):
@@ -213,15 +220,18 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.resources_cache and (current_time - self.resources_cache_timestamp < self.CACHE_TTL):
+            print(f"[MCP] [{self.display_name}] Using cached resources ({len(self.resources_cache)} resources)")
             return self.resources_cache
             
         try:
+            print(f"[MCP] [{self.display_name}] Request: list_resources()")
             result = await self.session.list_resources()
             self.resources_cache = [r.model_dump() for r in result.resources]
             self.resources_cache_timestamp = current_time
+            print(f"[MCP] [{self.display_name}] Response: list_resources() -> {len(self.resources_cache)} resources")
             return self.resources_cache
         except Exception as e:
-            print(f"Error listing resources for {self.server_name}: {e}")
+            print(f"[MCP] [{self.display_name}] Error listing resources: {e}")
             return []
 
     async def get_prompts(self):
@@ -230,15 +240,18 @@ class PersistentConnection:
             
         current_time = time.time()
         if self.prompts_cache and (current_time - self.prompts_cache_timestamp < self.CACHE_TTL):
+            print(f"[MCP] [{self.display_name}] Using cached prompts ({len(self.prompts_cache)} prompts)")
             return self.prompts_cache
             
         try:
+            print(f"[MCP] [{self.display_name}] Request: list_prompts()")
             result = await self.session.list_prompts()
             self.prompts_cache = [p.model_dump() for p in result.prompts]
             self.prompts_cache_timestamp = current_time
+            print(f"[MCP] [{self.display_name}] Response: list_prompts() -> {len(self.prompts_cache)} prompts")
             return self.prompts_cache
         except Exception as e:
-            print(f"Error listing prompts for {self.display_name}: {e}")
+            print(f"[MCP] [{self.display_name}] Error listing prompts: {e}")
             return []
 
 import json
@@ -487,7 +500,32 @@ class GlobalConnectionManager:
         if not conn or not conn.session:
             raise ValueError(f"Server {server_name} not found or not connected")
         
-        return await conn.session.call_tool(tool_name, arguments)
+        # Log MCP request
+        import json
+        args_str = json.dumps(arguments, separators=(',', ':')) if arguments else "{}"
+        # Truncate long arguments for logging
+        if len(args_str) > 200:
+            args_str = args_str[:200] + "... (truncated)"
+        print(f"[MCP] [{conn.display_name}] Request: call_tool(tool='{tool_name}', arguments={args_str})")
+        
+        try:
+            result = await conn.session.call_tool(tool_name, arguments)
+            
+            # Log MCP response
+            result_summary = "success"
+            if hasattr(result, 'content'):
+                content_types = [item.type for item in result.content] if result.content else []
+                result_summary = f"success (content: {', '.join(content_types)})"
+            elif hasattr(result, 'model_dump'):
+                result_summary = "success (structured data)"
+            else:
+                result_summary = f"success (type: {type(result).__name__})"
+            
+            print(f"[MCP] [{conn.display_name}] Response: call_tool('{tool_name}') -> {result_summary}")
+            return result
+        except Exception as e:
+            print(f"[MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)}")
+            raise
 
 # Smart Routing Logic
 def parse_server_route(message: str) -> Optional[str]:
