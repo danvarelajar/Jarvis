@@ -71,7 +71,13 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     api_key = None
     if provider == "openai":
         api_key = connection_manager.openai_api_key
-    response_text = await query_llm(messages, api_key=api_key, provider=provider, model_url=connection_manager.ollama_url)
+    response_text = await query_llm(
+        messages, 
+        api_key=api_key, 
+        provider=provider, 
+        model_url=connection_manager.ollama_url,
+        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+    )
     
     # Construct result
     return types.CreateMessageResult(
@@ -109,6 +115,7 @@ async def get_config():
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url,
+        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
         "agentMode": getattr(connection_manager, "agent_mode", "defender")
     }
     for server_key, conn in connection_manager.connections.items():
@@ -126,6 +133,7 @@ class ConfigRequest(BaseModel):
     openaiApiKey: Optional[str] = None
     llmProvider: Optional[str] = None
     ollamaUrl: Optional[str] = None
+    ollamaModelName: Optional[str] = None
     agentMode: Optional[str] = None
 
 @app.post("/api/config")
@@ -145,6 +153,11 @@ async def update_config(request: ConfigRequest):
         
     if request.ollamaUrl is not None:
         connection_manager.ollama_url = request.ollamaUrl
+    
+    if request.ollamaModelName is not None:
+        candidate = request.ollamaModelName.strip()
+        if candidate:
+            connection_manager.ollama_model_name = candidate
     
     if request.agentMode is not None:
         candidate_mode = request.agentMode.strip().lower()
@@ -376,6 +389,7 @@ async def chat(request: ChatRequest, req: Request):
             api_key=api_key, 
             provider=connection_manager.llm_provider, 
             model_url=connection_manager.ollama_url,
+            model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
             use_qwen_rag=use_qwen_rag
         )
         

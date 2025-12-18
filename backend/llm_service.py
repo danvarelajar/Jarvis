@@ -132,7 +132,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         messages: List of message dicts
         system_prompt: System prompt to use
         model_url: Ollama server URL
-        model_name: Model name to use (default: qwen3:8b for Qwen RAG approach)
+        model_name: Model name to use (e.g., qwen3:8b, gemma3:8b, etc.)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
@@ -199,7 +199,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, use_qwen_rag: bool = False) -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False) -> str:
     """
     Queries the selected LLM provider.
     
@@ -209,6 +209,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         api_key: API key for providers that need it
         provider: 'openai' or 'ollama'
         model_url: URL for Ollama instance
+        model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
     """
     global LAST_REQUEST_TIME
@@ -246,7 +247,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # Build final system prompt: fixed instructions + tool context
             qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n\n{tool_context}\n\nRemember: Output ONLY the JSON tool call, nothing else."
             
-            return await query_ollama(messages, qwen_system_prompt, model_url, model_name="qwen3:8b")
+            return await query_ollama(messages, qwen_system_prompt, model_url, model_name=model_name)
         else:
             # Legacy Ollama approach
             ollama_system_prompt = SYSTEM_PROMPT
@@ -254,7 +255,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
             
-            return await query_ollama(messages, ollama_system_prompt, model_url, model_name="mcp-tool-executor")
+            return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
 
     # Construct the full prompt including system instructions (for OpenAI)
     current_system_prompt = SYSTEM_PROMPT
