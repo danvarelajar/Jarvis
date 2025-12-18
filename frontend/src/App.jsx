@@ -100,12 +100,27 @@ function App() {
     const sendMessage = async () => {
         if (!input.trim()) return;
 
+        // Log when user clicks send/enters message
+        const sendStartTime = performance.now();
+        const sendStartTimestamp = new Date().toISOString();
+        console.log(`[${sendStartTimestamp}] [FRONTEND] 🚀 User clicked send/entered message`);
+        console.log(`[${sendStartTimestamp}] [FRONTEND] Message content: "${input.substring(0, 100)}${input.length > 100 ? '...' : ''}"`);
+
         const userMsg = { role: 'user', content: input };
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         setIsLoading(true);
 
+        // Log before preparing fetch
+        const fetchPrepTime = performance.now();
+        console.log(`[${new Date().toISOString()}] [FRONTEND] Preparing fetch request (${(fetchPrepTime - sendStartTime).toFixed(2)}ms after send)`);
+
         try {
+            // Log right before fetch
+            const fetchStartTime = performance.now();
+            const fetchStartTimestamp = new Date().toISOString();
+            console.log(`[${fetchStartTimestamp}] [FRONTEND] 📤 Sending HTTP POST to /api/chat (${(fetchStartTime - sendStartTime).toFixed(2)}ms after send)`);
+            
             const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: {
@@ -115,12 +130,27 @@ function App() {
                 body: JSON.stringify({ messages: [...messages, userMsg] }),
             });
 
+            // Log when response is received
+            const responseTime = performance.now();
+            const responseTimestamp = new Date().toISOString();
+            console.log(`[${responseTimestamp}] [FRONTEND] 📥 HTTP response received (${(responseTime - fetchStartTime).toFixed(2)}ms after fetch, ${(responseTime - sendStartTime).toFixed(2)}ms total)`);
+            console.log(`[${responseTimestamp}] [FRONTEND] Response status: ${response.status} ${response.statusText}`);
+
             const data = await response.json();
+            
+            // Log when JSON is parsed
+            const parseTime = performance.now();
+            console.log(`[${new Date().toISOString()}] [FRONTEND] ✅ Response parsed and displayed (${(parseTime - responseTime).toFixed(2)}ms after response)`);
+            
             setMessages(prev => [...prev, data]);
         } catch (error) {
+            const errorTime = performance.now();
+            console.error(`[${new Date().toISOString()}] [FRONTEND] ❌ Error occurred (${(errorTime - sendStartTime).toFixed(2)}ms after send):`, error);
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}` }]);
         } finally {
             setIsLoading(false);
+            const totalTime = performance.now() - sendStartTime;
+            console.log(`[${new Date().toISOString()}] [FRONTEND] 🏁 Total time from send to completion: ${totalTime.toFixed(2)}ms`);
         }
     };
 

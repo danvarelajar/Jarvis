@@ -249,6 +249,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         "model": model_name,
         "messages": ollama_messages,
         "stream": False,
+        "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
         "options": {
             "temperature": 0 # Low temp for tool execution
         }
