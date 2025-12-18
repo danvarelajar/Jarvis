@@ -204,9 +204,13 @@ async def get_ollama_models(ollama_url: str = None):
     """
     import httpx
     
+    request_start = time.time()
+    print(f"[{get_timestamp()}] [API] GET /api/ollama/models request received")
+    
     # Use provided URL or fall back to configured URL
     url = ollama_url or connection_manager.ollama_url
     if not url:
+        print(f"[{get_timestamp()}] [API] Error: Ollama URL is not configured")
         return {"error": "Ollama URL is not configured"}
     
     # Ensure URL doesn't have /api/chat suffix
@@ -218,15 +222,28 @@ async def get_ollama_models(ollama_url: str = None):
     
     # Ollama API endpoint for listing models
     api_endpoint = f"{base_url}/api/tags"
+    print(f"[{get_timestamp()}] [API] Fetching models from: {api_endpoint}")
     
     try:
         timeout = httpx.Timeout(10.0, connect=5.0)
+        http_start = time.time()
+        print(f"[{get_timestamp()}] [API] HTTP GET request initiated...")
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(api_endpoint)
+            http_time = time.time() - http_start
+            print(f"[{get_timestamp()}] [API] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
+            
             response.raise_for_status()
+            
+            # Track JSON parsing time
+            parse_start = time.time()
             result = response.json()
+            parse_time = time.time() - parse_start
+            if parse_time > 0.01:
+                print(f"[{get_timestamp()}] [API] JSON parsed ({format_duration(parse_start)})")
             
             # Extract model names from Ollama response
+            process_start = time.time()
             models = []
             if "models" in result:
                 for model in result["models"]:
@@ -244,11 +261,20 @@ async def get_ollama_models(ollama_url: str = None):
                         "modified_at": model.get("modified_at", "")
                     })
             
+            process_time = time.time() - process_start
+            if process_time > 0.01:
+                print(f"[{get_timestamp()}] [API] Processed {len(models)} models ({format_duration(process_start)})")
+            
+            total_time = time.time() - request_start
+            print(f"[{get_timestamp()}] [API] GET /api/ollama/models completed (total: {format_duration(request_start)})")
+            
             return {"models": models, "error": None}
     except httpx.HTTPStatusError as e:
         error_body = e.response.text if hasattr(e.response, 'text') else str(e)
+        print(f"[{get_timestamp()}] [API] Ollama HTTP Error ({format_duration(request_start)}): {error_body}")
         return {"models": [], "error": f"Ollama HTTP Error: {error_body}"}
     except Exception as e:
+        print(f"[{get_timestamp()}] [API] Error fetching models ({format_duration(request_start)}): {str(e)}")
         return {"models": [], "error": f"Error fetching models from Ollama: {str(e)}"}
 
 @app.post("/api/chat")
