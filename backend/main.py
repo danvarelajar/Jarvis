@@ -253,8 +253,13 @@ async def get_ollama_models(ollama_url: str = None):
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req: Request):
+    request_start = time.time()
+    print(f"[{get_timestamp()}] [REQUEST] Chat request received")
+    
     # Reload config to ensure we have the latest model name
+    config_start = time.time()
     await connection_manager.load_config()
+    print(f"[{get_timestamp()}] [REQUEST] Config reloaded ({format_duration(config_start)})")
     
     user_message = request.messages[-1]["content"]
     # Determine API Key based on provider
