@@ -25,6 +25,8 @@ CRITICAL RULES:
 - ONLY call tools if: (1) tools are listed in the documentation AND (2) the user's request clearly requires a tool
 - NEVER invent or hallucinate tool names - only use tools that are explicitly listed in the documentation
 - Use the EXACT tool name as provided in the MCP tool documentation
+- Use the EXACT parameter names from the Input Schema - do NOT use synonyms or alternative names
+- Check the Input Schema properties to see the exact parameter names required (e.g., if schema says "from", use "from" not "origin")
 - If you already have all the information needed, return a TEXT response (not JSON)
 - If you see "System Error: You have already called tool..." - STOP calling tools and return a text response
 

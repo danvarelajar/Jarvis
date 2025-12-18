@@ -570,21 +570,29 @@ async def chat(request: ChatRequest, req: Request):
                     required_args = input_schema.get('required', [])
                     allowed_args = input_schema.get('properties', {}).keys()
                     
-                    # Compatibility: some lab tools have evolved arg names over time (e.g. "text" vs "untrustedText").
+                    # Compatibility: some lab tools have evolved arg names over time.
                     # If the schema requires one but the model provided the other, auto-alias to the required name.
                     try:
-                        if (
-                            "untrustedText" in required_args
-                            and "untrustedText" not in tool_call.arguments
-                            and "text" in tool_call.arguments
-                        ):
-                            tool_call.arguments["untrustedText"] = tool_call.arguments.pop("text")
-                        elif (
-                            "text" in required_args
-                            and "text" not in tool_call.arguments
-                            and "untrustedText" in tool_call.arguments
-                        ):
-                            tool_call.arguments["text"] = tool_call.arguments.pop("untrustedText")
+                        # Common aliases for tool parameters
+                        aliases = {
+                            "text": "untrustedText",
+                            "untrustedText": "text",
+                            "origin": "from",
+                            "from": "origin",
+                            "destination": "to",
+                            "to": "destination",
+                            "departure_date": "departDate",
+                            "departDate": "departure_date",
+                            "return_date": "returnDate",
+                            "returnDate": "return_date",
+                        }
+                        
+                        # Check for aliases and map them
+                        for provided_name, alias_name in aliases.items():
+                            if provided_name in tool_call.arguments and alias_name in allowed_args and alias_name not in tool_call.arguments:
+                                # Map the alias
+                                tool_call.arguments[alias_name] = tool_call.arguments.pop(provided_name)
+                                print(f"[DEBUG] Mapped parameter '{provided_name}' -> '{alias_name}'")
                     except Exception:
                         # If arguments aren't a mutable mapping for any reason, skip aliasing.
                         pass
