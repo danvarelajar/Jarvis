@@ -254,17 +254,50 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         }
     }
     
+    # Log payload size for debugging
+    import json as json_module
+    payload_size = len(json_module.dumps(payload))
+    total_chars = sum(len(str(msg.get("content", ""))) for msg in ollama_messages)
+    print(f"[{get_timestamp()}] [LLM] Payload size: {payload_size} bytes, Total message chars: {total_chars}")
+    
     try:
         # Increase timeout to 300s (5 mins) because loading a model for the first time can be slow
         timeout = httpx.Timeout(300.0, connect=10.0)
         request_start = time.time()
-        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama...")
+        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama (endpoint: {api_endpoint})...")
+        
+        # Track connection establishment time
+        connect_start = time.time()
         async with httpx.AsyncClient(timeout=timeout) as client:
+            connect_time = time.time() - connect_start
+            if connect_time > 0.1:
+                print(f"[{get_timestamp()}] [LLM] HTTP client created ({format_duration(connect_start)})")
+            
+            # Track actual HTTP request time
+            http_start = time.time()
+            print(f"[{get_timestamp()}] [LLM] HTTP POST request initiated...")
             response = await client.post(api_endpoint, json=payload)
+            http_time = time.time() - http_start
+            print(f"[{get_timestamp()}] [LLM] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
+            
             response.raise_for_status()
+            
+            # Track JSON parsing time
+            parse_start = time.time()
             result = response.json()
-            print(f"[{get_timestamp()}] [LLM] Ollama response received ({format_duration(request_start)})")
-            return result["message"]["content"]
+            parse_time = time.time() - parse_start
+            if parse_time > 0.1:
+                print(f"[{get_timestamp()}] [LLM] JSON parsed ({format_duration(parse_start)})")
+            
+            total_time = time.time() - request_start
+            print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)}, HTTP wait: {format_duration(http_start)})")
+            
+            # Log response size
+            response_content = result.get("message", {}).get("content", "")
+            if response_content:
+                print(f"[{get_timestamp()}] [LLM] Response content length: {len(response_content)} chars")
+            
+            return response_content
     except httpx.HTTPStatusError as e:
         error_body = e.response.text
         print(f"Ollama HTTP Error: {error_body}")
