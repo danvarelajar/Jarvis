@@ -262,6 +262,31 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     print(f"[{get_timestamp()}] [LLM] Payload size: {payload_size} bytes, Total message chars: {total_chars}")
     
     try:
+        # Check if model is already loaded before making request
+        base_url = model_url
+        if base_url.endswith("/api/chat"):
+            base_url = base_url[:-9]
+        if base_url.endswith("/"):
+            base_url = base_url[:-1]
+        ps_endpoint = f"{base_url}/api/ps"
+        
+        try:
+            check_start = time.time()
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as check_client:
+                ps_response = await check_client.get(ps_endpoint)
+                if ps_response.status_code == 200:
+                    ps_data = ps_response.json()
+                    models_loaded = ps_data.get("models", [])
+                    model_loaded = any(m.get("name", "").startswith(model_name) for m in models_loaded)
+                    if model_loaded:
+                        print(f"[{get_timestamp()}] [LLM] ✓ Model '{model_name}' is already loaded in memory")
+                    else:
+                        print(f"[{get_timestamp()}] [LLM] ⚠️  Model '{model_name}' is NOT loaded - will need to load from disk (~4s delay)")
+                else:
+                    print(f"[{get_timestamp()}] [LLM] Could not check model status (status: {ps_response.status_code})")
+        except Exception as e:
+            print(f"[{get_timestamp()}] [LLM] Could not check if model is loaded: {e}")
+        
         # Increase timeout to 300s (5 mins) because loading a model for the first time can be slow
         timeout = httpx.Timeout(300.0, connect=10.0)
         request_start = time.time()
