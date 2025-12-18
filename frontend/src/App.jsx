@@ -15,6 +15,9 @@ function App() {
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [llmProvider, setLlmProvider] = useState('openai');
     const [ollamaUrl, setOllamaUrl] = useState('http://10.3.0.7:11434');
+    const [ollamaModelName, setOllamaModelName] = useState('qwen3:8b');
+    const [ollamaModels, setOllamaModels] = useState([]);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
     const [agentMode, setAgentMode] = useState('defender');
     const messagesEndRef = useRef(null);
 
@@ -41,6 +44,7 @@ function App() {
                     if (config.openaiApiKey) setOpenaiApiKey(config.openaiApiKey);
                     if (config.llmProvider) setLlmProvider(config.llmProvider);
                     if (config.ollamaUrl) setOllamaUrl(config.ollamaUrl);
+                    if (config.ollamaModelName) setOllamaModelName(config.ollamaModelName);
                     if (config.agentMode) setAgentMode(config.agentMode);
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
                         setServerConfigJson(JSON.stringify(config, null, 2));
@@ -54,6 +58,34 @@ function App() {
         };
         fetchConfig();
     }, []);
+
+    // Fetch Ollama models when Ollama is selected or URL changes
+    useEffect(() => {
+        const fetchModels = async () => {
+            if (llmProvider === 'ollama' && ollamaUrl) {
+                setIsLoadingModels(true);
+                try {
+                    const response = await fetch(`/api/ollama/models?ollama_url=${encodeURIComponent(ollamaUrl)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.models) {
+                            setOllamaModels(data.models);
+                            // If current model is not in the list, keep it but add it
+                            const modelExists = data.models.some(m => m.name === ollamaModelName);
+                            if (!modelExists && ollamaModelName) {
+                                setOllamaModels(prev => [...prev, { name: ollamaModelName, full_name: ollamaModelName }]);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Failed to fetch Ollama models:", error);
+                } finally {
+                    setIsLoadingModels(false);
+                }
+            }
+        };
+        fetchModels();
+    }, [llmProvider, ollamaUrl]);
 
     const sendMessage = async () => {
         if (!input.trim()) return;
@@ -161,6 +193,7 @@ function App() {
                                             ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                             llmProvider: llmProvider,
                                             ollamaUrl: ollamaUrl,
+                                            ollamaModelName: ollamaModelName,
                                             agentMode: newMode
                                         }),
                                     });
@@ -196,6 +229,7 @@ function App() {
                                             ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                             llmProvider: newProvider,
                                             ollamaUrl: ollamaUrl,
+                                            ollamaModelName: ollamaModelName,
                                             agentMode: agentMode
                                         }),
                                     });
@@ -210,31 +244,97 @@ function App() {
                         </select>
 
                         {llmProvider === 'ollama' && (
-                            <input
-                                type="text"
-                                value={ollamaUrl}
-                                onChange={(e) => setOllamaUrl(e.target.value)}
-                                onBlur={async () => {
-                                    try {
-                                        const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
-                                        await fetch('/api/config', {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({
-                                                mcpServers: {},
-                                                ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
-                                                llmProvider: llmProvider,
-                                                ollamaUrl: ollamaUrl,
-                                                agentMode: agentMode
-                                            }),
-                                        });
-                                    } catch (error) {
-                                        console.error("Failed to save Ollama URL:", error);
-                                    }
-                                }}
-                                placeholder="http://10.3.0.7:11434"
-                                className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
-                            />
+                            <>
+                                <input
+                                    type="text"
+                                    value={ollamaUrl}
+                                    onChange={(e) => setOllamaUrl(e.target.value)}
+                                    onBlur={async () => {
+                                        try {
+                                            const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
+                                            await fetch('/api/config', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                    mcpServers: {},
+                                                    ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
+                                                    llmProvider: llmProvider,
+                                                    ollamaUrl: ollamaUrl,
+                                                    ollamaModelName: ollamaModelName,
+                                                    agentMode: agentMode
+                                                }),
+                                            });
+                                        } catch (error) {
+                                            console.error("Failed to save Ollama URL:", error);
+                                        }
+                                    }}
+                                    placeholder="http://10.3.0.7:11434"
+                                    className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none mb-2"
+                                />
+                                <div className="flex items-center gap-2">
+                                    <select
+                                        value={ollamaModelName}
+                                        onChange={async (e) => {
+                                            const newModel = e.target.value;
+                                            setOllamaModelName(newModel);
+                                            try {
+                                                const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
+                                                await fetch('/api/config', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        mcpServers: {},
+                                                        ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
+                                                        llmProvider: llmProvider,
+                                                        ollamaUrl: ollamaUrl,
+                                                        ollamaModelName: newModel,
+                                                        agentMode: agentMode
+                                                    }),
+                                                });
+                                            } catch (error) {
+                                                console.error("Failed to save Ollama model:", error);
+                                            }
+                                        }}
+                                        disabled={isLoadingModels}
+                                        className="flex-1 bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
+                                    >
+                                        {isLoadingModels ? (
+                                            <option>Loading models...</option>
+                                        ) : ollamaModels.length === 0 ? (
+                                            <option value={ollamaModelName}>{ollamaModelName || 'No models found'}</option>
+                                        ) : (
+                                            ollamaModels.map((model) => (
+                                                <option key={model.name} value={model.name}>
+                                                    {model.name}
+                                                </option>
+                                            ))
+                                        )}
+                                    </select>
+                                    <button
+                                        onClick={async () => {
+                                            setIsLoadingModels(true);
+                                            try {
+                                                const response = await fetch(`/api/ollama/models?ollama_url=${encodeURIComponent(ollamaUrl)}`);
+                                                if (response.ok) {
+                                                    const data = await response.json();
+                                                    if (data.models) {
+                                                        setOllamaModels(data.models);
+                                                    }
+                                                }
+                                            } catch (error) {
+                                                console.error("Failed to refresh models:", error);
+                                            } finally {
+                                                setIsLoadingModels(false);
+                                            }
+                                        }}
+                                        disabled={isLoadingModels}
+                                        className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs rounded border border-gray-700 focus:outline-none disabled:opacity-50"
+                                        title="Refresh models"
+                                    >
+                                        🔄
+                                    </button>
+                                </div>
+                            </>
                         )}
                     </div>
 
@@ -256,6 +356,7 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
+                                                ollamaModelName: ollamaModelName,
                                                 agentMode: agentMode
                                             }),
                                         });

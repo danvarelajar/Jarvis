@@ -181,6 +181,61 @@ async def update_config(request: ConfigRequest):
 async def health_check():
     return {"status": "ok"}
 
+@app.get("/api/ollama/models")
+async def get_ollama_models(ollama_url: str = None):
+    """
+    Fetches the list of available models from Ollama.
+    If ollama_url is not provided, uses the configured URL from connection_manager.
+    """
+    import httpx
+    
+    # Use provided URL or fall back to configured URL
+    url = ollama_url or connection_manager.ollama_url
+    if not url:
+        return {"error": "Ollama URL is not configured"}
+    
+    # Ensure URL doesn't have /api/chat suffix
+    base_url = url
+    if base_url.endswith("/api/chat"):
+        base_url = base_url[:-9]
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    
+    # Ollama API endpoint for listing models
+    api_endpoint = f"{base_url}/api/tags"
+    
+    try:
+        timeout = httpx.Timeout(10.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(api_endpoint)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Extract model names from Ollama response
+            models = []
+            if "models" in result:
+                for model in result["models"]:
+                    model_name = model.get("name", "")
+                    # Remove any tags (e.g., "qwen3:8b" from "qwen3:8b:latest")
+                    if ":" in model_name:
+                        # Keep the tag part (e.g., "qwen3:8b")
+                        parts = model_name.split(":")
+                        if len(parts) >= 2:
+                            model_name = ":".join(parts[:2])
+                    models.append({
+                        "name": model_name,
+                        "full_name": model.get("name", ""),
+                        "size": model.get("size", 0),
+                        "modified_at": model.get("modified_at", "")
+                    })
+            
+            return {"models": models, "error": None}
+    except httpx.HTTPStatusError as e:
+        error_body = e.response.text if hasattr(e.response, 'text') else str(e)
+        return {"models": [], "error": f"Ollama HTTP Error: {error_body}"}
+    except Exception as e:
+        return {"models": [], "error": f"Error fetching models from Ollama: {str(e)}"}
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req: Request):
     user_message = request.messages[-1]["content"]
