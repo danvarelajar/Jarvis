@@ -158,6 +158,7 @@ async def update_config(request: ConfigRequest):
         candidate = request.ollamaModelName.strip()
         if candidate:
             connection_manager.ollama_model_name = candidate
+            print(f"[DEBUG] Updated Ollama model name to: {candidate}")
     
     if request.agentMode is not None:
         candidate_mode = request.agentMode.strip().lower()
@@ -238,6 +239,9 @@ async def get_ollama_models(ollama_url: str = None):
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req: Request):
+    # Reload config to ensure we have the latest model name
+    await connection_manager.load_config()
+    
     user_message = request.messages[-1]["content"]
     # Determine API Key based on provider
     provider = connection_manager.llm_provider
@@ -438,13 +442,17 @@ async def chat(request: ChatRequest, req: Request):
         # Enable Qwen RAG approach when using Ollama provider
         use_qwen_rag = (connection_manager.llm_provider == "ollama")
         
+        # Get the model name (ensure it's loaded from config)
+        model_name = getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+        print(f"[DEBUG] Using Ollama model from config: {model_name}")
+        
         response_content = await query_llm(
             current_messages, 
             tools, 
             api_key=api_key, 
             provider=connection_manager.llm_provider, 
             model_url=connection_manager.ollama_url,
-            model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
+            model_name=model_name,
             use_qwen_rag=use_qwen_rag
         )
         

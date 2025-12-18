@@ -352,6 +352,7 @@ class GlobalConnectionManager:
                     self.ollama_model_name = llm_config.get("ollamaModelName", "qwen3:8b")
                     self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
+                print(f"[DEBUG] Loaded ollama_model_name: {self.ollama_model_name}")
             except Exception as e:
                 print(f"Failed to load LLM config: {e}")
         else:
