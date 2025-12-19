@@ -372,13 +372,13 @@ class GlobalConnectionManager:
                             pass  # No action needed
                     else:
                         # Server not connected or connection lost - connect it
-                    await self.add_server(
-                        name, 
-                        details["url"], 
-                        details.get("headers"), 
-                        transport=details.get("transport", "sse"),
-                        save=False
-                    )
+                        await self.add_server(
+                            name, 
+                            details["url"], 
+                            details.get("headers"), 
+                            transport=details.get("transport", "sse"),
+                            save=False
+                        )
                     
                 # 3. Remove servers that are no longer in config
                 to_remove = active_servers - new_servers
