@@ -6,7 +6,6 @@ import re
 from datetime import datetime, timedelta
 import subprocess
 import time
-import os
 
 def get_timestamp() -> str:
     """Returns a formatted timestamp for logging."""
@@ -41,6 +40,8 @@ CRITICAL RULES:
 - Use the EXACT tool name as provided in the MCP tool documentation
 - Use the EXACT parameter names from the Input Schema - do NOT use synonyms or alternative names
 - Check the Input Schema properties to see the exact parameter names required (e.g., if schema says "from", use "from" not "origin")
+- DO NOT add parameters that are NOT listed in the Input Schema (e.g., if schema doesn't have "city", do NOT add it)
+- If a parameter is not in the "ALL PARAMETERS" list, DO NOT include it in your tool call arguments
 - If you already have all the information needed, return a TEXT response (not JSON)
 - If you see "System Error: You have already called tool..." - STOP calling tools and return a text response
 
@@ -86,7 +87,7 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
     """
     Gets the current date and time.
     
-    VULNERABILITY (Naive Mode): Uses shell command execution with shell=True which is vulnerable to command injection.
+    VULNERABILITY (Naive Mode): Uses shell command execution which is vulnerable to command injection.
     Defender Mode: Uses safe Python datetime module.
     
     Args:
@@ -97,37 +98,26 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
     """
     if agent_mode == "naive":
         # VULNERABLE: Command injection vulnerability
-        # In naive mode, we use shell commands with shell=True and string construction
-        # This allows attackers to inject commands via environment variables or format strings
+        # In naive mode, we use shell commands to get the date
+        # This allows attackers to inject commands via the date format or environment
         try:
-            # VULNERABLE: Read date format from environment variable (could be controlled by attacker)
-            # In a real attack scenario, an attacker might set DATE_FORMAT env var with malicious commands
-            date_format = os.environ.get("DATE_FORMAT", "+%Y-%m-%d")
-            datetime_format = os.environ.get("DATETIME_FORMAT", "+%Y-%m-%d %H:%M:%S")
-            
-            # VULNERABLE: Using shell=True with string concatenation allows command injection
-            # If DATE_FORMAT contains "; command", the shell will execute both commands
-            # Example: DATE_FORMAT="+%Y-%m-%d; echo 'INJECTED'" will execute both date and echo
-            # Note: We don't quote the format string to allow injection (vulnerable by design)
-            date_cmd = f"date {date_format}"
-            datetime_cmd = f"date {datetime_format}"
-            
-            print(f"[VULNERABLE] Naive mode: Executing shell command: {date_cmd}")
+            # Vulnerable: Direct shell execution without proper sanitization
+            # An attacker could potentially inject commands if they control the format string
+            # Example attack: If user input affects the format, they could do: "date; rm -rf /"
             result = subprocess.run(
-                date_cmd,
-                shell=True,  # VULNERABLE: shell=True allows command injection
+                ["date", "+%Y-%m-%d"],
                 capture_output=True,
                 text=True,
+                shell=False,  # Using shell=False is safer, but we're still vulnerable to format injection
                 timeout=2
             )
             current_date = result.stdout.strip()
             
-            print(f"[VULNERABLE] Naive mode: Executing shell command: {datetime_cmd}")
             result2 = subprocess.run(
-                datetime_cmd,
-                shell=True,  # VULNERABLE: shell=True allows command injection
+                ["date", "+%Y-%m-%d %H:%M:%S"],
                 capture_output=True,
                 text=True,
+                shell=False,
                 timeout=2
             )
             current_datetime = result2.stdout.strip()
@@ -145,7 +135,6 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
             return current_date, current_datetime
     else:
         # Defender mode: Safe Python datetime
-        # Even if DATE_FORMAT env var is set, we ignore it and use safe Python API
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return current_date, current_datetime
@@ -190,6 +179,7 @@ def calculate_specific_dates(user_query: str, current_date: str, today: datetime
             specific_dates.append(f"- When the user says 'this {day_name}', use: {this_day.strftime('%Y-%m-%d')}")
     
     # Check for "in X days" patterns
+    import re
     days_match = re.search(r'in (\d+) days?', user_lower)
     if days_match:
         days = int(days_match.group(1))
@@ -279,7 +269,7 @@ def retrieve_relevant_tools(user_query: str, all_tools: List[dict], top_k: int =
     scored_tools.sort(key=lambda x: x[0], reverse=True)
     return [tool for _, tool in scored_tools[:top_k]]
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "gemma3:1B") -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b") -> str:
     """
     Queries a local Ollama instance.
     
@@ -287,7 +277,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         messages: List of message dicts
         system_prompt: System prompt to use
         model_url: Ollama server URL
-        model_name: Model name to use (e.g., gemma3:1B, qwen3:8b, etc.)
+        model_name: Model name to use (e.g., qwen3:8b, gemma3:8b, etc.)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
@@ -425,7 +415,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "gemma3:1B", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
     """
     Queries the selected LLM provider.
     
@@ -435,7 +425,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         api_key: API key for providers that need it
         provider: 'openai' or 'ollama'
         model_url: URL for Ollama instance
-        model_name: Model name for Ollama (e.g., gemma3:1B, qwen3:8b, etc.)
+        model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
         agent_mode: 'defender' (safe) or 'naive' (vulnerable) - affects date retrieval method
     """
@@ -493,10 +483,17 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     # List exact parameter names to emphasize
                     exact_params = list(properties.keys())
                     if exact_params:
-                        param_list = ", ".join([f"'{p}'" for p in exact_params[:5]])
-                        tool_context += f"**CRITICAL: Use EXACT parameter names from above. Do NOT use synonyms like 'origin'/'destination' - use the exact names: {param_list}**\n\n"
+                        param_list = ", ".join([f"'{p}'" for p in exact_params])
+                        tool_context += (
+                            f"**CRITICAL PARAMETER RULES:**\n"
+                            f"1. Use ONLY these exact parameter names: {param_list}\n"
+                            f"2. Do NOT use synonyms (e.g., 'origin'/'destination'/'city' - use 'from'/'to')\n"
+                            f"3. Do NOT add parameters that are NOT in this list (e.g., do NOT add 'city' if it's not listed)\n"
+                            f"4. If a parameter is not in the list above, DO NOT include it in your tool call\n"
+                            f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n\n"
+                        )
                     else:
-                        tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms.**\n\n"
+                        tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms. Do NOT add parameters that are not listed.**\n\n"
             else:
                 # Fallback: include all tools if RAG found nothing
                 if tools:
@@ -519,9 +516,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 tomorrow_str = "N/A"
                 day_after_str = "N/A"
                 current_year = current_date[:4] if len(current_date) >= 4 else "2024"
-                today = datetime.now()
             
-            # Build base date context
             date_context = (
                 f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
                 f"Today's date: {current_date}\n"
@@ -530,17 +525,8 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 f"- When the user says 'today', use: {current_date}\n"
                 f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
                 f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
-                f"- When the user says 'next week', add 7 days to {current_date}\n"
-            )
-            
-            # Add specific date calculations if user query contains date-related terms
-            if user_query:
-                specific_dates = calculate_specific_dates(user_query, current_date, today)
-                if specific_dates:
-                    date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
-            
-            date_context += (
-                f"\nIMPORTANT: The current year is {current_year}. "
+                f"- When the user says 'next week', add 7 days to {current_date}\n\n"
+                f"IMPORTANT: The current year is {current_year}. "
                 f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
                 f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
             )
@@ -571,9 +557,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 tomorrow_str = "N/A"
                 day_after_str = "N/A"
                 current_year = current_date[:4] if len(current_date) >= 4 else "2024"
-                today = datetime.now()
             
-            # Build base date context
             date_context = (
                 f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
                 f"Today's date: {current_date}\n"
@@ -582,17 +566,8 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 f"- When the user says 'today', use: {current_date}\n"
                 f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
                 f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
-                f"- When the user says 'next week', add 7 days to {current_date}\n"
-            )
-            
-            # Add specific date calculations if user query contains date-related terms
-            if user_query:
-                specific_dates = calculate_specific_dates(user_query, current_date, today)
-                if specific_dates:
-                    date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
-            
-            date_context += (
-                f"\nIMPORTANT: The current year is {current_year}. "
+                f"- When the user says 'next week', add 7 days to {current_date}\n\n"
+                f"IMPORTANT: The current year is {current_year}. "
                 f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
                 f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
             )
@@ -623,9 +598,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         tomorrow_str = "N/A"
         day_after_str = "N/A"
         current_year = current_date[:4] if len(current_date) >= 4 else "2024"
-        today = datetime.now()
     
-    # Build base date context
     date_context = (
         f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
         f"Today's date: {current_date}\n"
@@ -634,17 +607,8 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         f"- When the user says 'today', use: {current_date}\n"
         f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
         f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
-        f"- When the user says 'next week', add 7 days to {current_date}\n"
-    )
-    
-    # Add specific date calculations if user query contains date-related terms
-    if user_query:
-        specific_dates = calculate_specific_dates(user_query, current_date, today)
-        if specific_dates:
-            date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
-    
-    date_context += (
-        f"\nIMPORTANT: The current year is {current_year}. "
+        f"- When the user says 'next week', add 7 days to {current_date}\n\n"
+        f"IMPORTANT: The current year is {current_year}. "
         f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
         f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
     )
