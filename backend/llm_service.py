@@ -428,8 +428,9 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             
             # Build final system prompt: fixed instructions + tool context
             if not tools or not relevant_tools:
-                # No tools available - user didn't use @server_name prefix
-                qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: No tools are available because the user did not use @server_name prefix (e.g., @weather, @booking). Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
+                # No tools available - user didn't use @server_name prefix OR loop was detected
+                # Make it very explicit - no JSON allowed
+                qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nCRITICAL: No tools are available. You MUST respond with PLAIN TEXT ONLY. DO NOT output JSON. DO NOT output {{}}. DO NOT output code blocks with JSON. Write a natural language response. If you output any JSON, you are making an error."
             else:
                 qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: Tools are available because the user used @server_name. After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
             
@@ -441,9 +442,9 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
             
             ollama_system_prompt = SYSTEM_PROMPT + date_context
-            if tools:
-                tool_descriptions = json.dumps(tools, indent=2)
-                ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+        if tools:
+            tool_descriptions = json.dumps(tools, indent=2)
+            ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
             else:
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."

@@ -622,6 +622,9 @@ async def chat(request: ChatRequest, req: Request):
         # )
         # current_messages[-1]["content"] = f"{current_messages[-1]['content']}\n{system_note}"
     
+    # Track if we're in loop detection mode (tools removed due to repeated tool calls)
+    loop_detected = False
+    
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
         turn_start = time.time()
@@ -629,7 +632,10 @@ async def chat(request: ChatRequest, req: Request):
         if tools:
             print(f"[{get_timestamp()}] [DEBUG] Tools available for LLM: {[t.get('name') for t in tools]}")
         else:
-            print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
+            if loop_detected:
+                print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM (loop detected - text only mode)")
+            else:
+                print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
         
         # Query LLM
         # Enable Qwen RAG approach when using Ollama provider
@@ -647,8 +653,17 @@ async def chat(request: ChatRequest, req: Request):
             pass  # No filtering - intentionally vulnerable
         
         llm_start = time.time()
+        # If loop was detected, add an extra strong instruction to the messages
+        messages_to_send = current_messages.copy()
+        if loop_detected and not tools:
+            # Add a system-level instruction at the end to override any previous JSON instructions
+            messages_to_send.append({
+                "role": "system", 
+                "content": "CRITICAL INSTRUCTION: You are in TEXT-ONLY mode. NO TOOLS are available. DO NOT output JSON. DO NOT output {}. DO NOT try to call tools. Return ONLY plain text. If you see any JSON in your response, you are making an error. Write a natural language response summarizing the information you have."
+            })
+        
         response_content = await query_llm(
-            current_messages, 
+            messages_to_send, 
             tools, 
             api_key=api_key, 
             provider=connection_manager.llm_provider, 
@@ -708,12 +723,17 @@ async def chat(request: ChatRequest, req: Request):
                 tool_call_history = set()
             
             if tool_signature in tool_call_history:
-                error_msg = f"System Error: You have already called tool '{tool_call.tool}' with these arguments. STOP calling tools now. Return a TEXT response (not JSON) summarizing the information you have gathered from the previous tool calls."
+                error_msg = f"CRITICAL: You have already called tool '{tool_call.tool}' with these exact arguments. This is a LOOP. You MUST STOP calling tools immediately. DO NOT output JSON. DO NOT output {{}}. Return ONLY plain text summarizing the information you already have from previous tool calls. Example: 'Based on the weather data I retrieved, Madrid Spain has...' - just write the answer in natural language, no JSON, no tool calls."
                 print(f"Loop detected: {error_msg}")
-                current_messages.append({"role": "assistant", "content": response_content})
+                # Remove the last assistant message that contained the JSON tool call to break the pattern
+                if current_messages and current_messages[-1].get("role") == "assistant":
+                    current_messages.pop()
+                # Add a very explicit instruction
                 current_messages.append({"role": "user", "content": error_msg})
                 # Remove tools to force text response
                 tools = []
+                # Add a flag to indicate we're in "text only" mode due to loop detection
+                loop_detected = True
                 continue
             
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
