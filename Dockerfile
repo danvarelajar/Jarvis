@@ -25,6 +25,7 @@ COPY backend/ backend/
 COPY --from=build /app/frontend/dist /app/frontend/dist
 
 # Environment variables
+ENV PYTHONUNBUFFERED=1
 
 # Create data directory for persistence
 RUN mkdir -p /app/data

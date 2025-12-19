@@ -368,12 +368,12 @@ async def chat(request: ChatRequest, req: Request):
     # Log request details immediately
     try:
         messages_count = len(request.messages) if request.messages else 0
-        print(f"[{get_timestamp()}] [REQUEST] Messages in request: {messages_count}")
+        print(f"[{get_timestamp()}] [REQUEST] Messages in request: {messages_count}", flush=True)
         if messages_count > 0:
             last_message = request.messages[-1]
-            print(f"[{get_timestamp()}] [REQUEST] Last message keys: {list(last_message.keys()) if isinstance(last_message, dict) else 'not a dict'}")
+            print(f"[{get_timestamp()}] [REQUEST] Last message keys: {list(last_message.keys()) if isinstance(last_message, dict) else 'not a dict'}", flush=True)
     except Exception as e:
-        print(f"[{get_timestamp()}] [REQUEST] Error inspecting request: {e}")
+        print(f"[{get_timestamp()}] [REQUEST] Error inspecting request: {e}", flush=True)
     
     # Reload config to ensure we have the latest model name
     config_start = time.time()
