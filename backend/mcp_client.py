@@ -372,13 +372,13 @@ class GlobalConnectionManager:
                             pass  # No action needed
                     else:
                         # Server not connected or connection lost - connect it
-                        await self.add_server(
-                            name, 
-                            details["url"], 
-                            details.get("headers"), 
-                            transport=details.get("transport", "sse"),
-                            save=False
-                        )
+                    await self.add_server(
+                        name, 
+                        details["url"], 
+                        details.get("headers"), 
+                        transport=details.get("transport", "sse"),
+                        save=False
+                    )
                     
                 # 3. Remove servers that are no longer in config
                 to_remove = active_servers - new_servers
@@ -550,8 +550,16 @@ class GlobalConnectionManager:
         call_start = time.time()
         print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Request: call_tool(tool='{tool_name}', arguments={args_str})")
         
+        # Add timeout to prevent indefinite hanging (60 seconds should be enough for most tool calls)
+        # If the tool call takes longer, it will raise asyncio.TimeoutError
+        tool_call_timeout = 60.0  # 60 seconds
+        
         try:
-            result = await conn.session.call_tool(tool_name, arguments)
+            print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Waiting for tool response (timeout: {tool_call_timeout}s)...")
+            result = await asyncio.wait_for(
+                conn.session.call_tool(tool_name, arguments),
+                timeout=tool_call_timeout
+            )
             
             # Log MCP response
             result_summary = "success"
@@ -565,6 +573,11 @@ class GlobalConnectionManager:
             
             print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Response: call_tool('{tool_name}') -> {result_summary} ({format_duration(call_start)})")
             return result
+        except asyncio.TimeoutError:
+            elapsed = time.time() - call_start
+            error_msg = f"Tool call timed out after {elapsed:.1f}s (timeout: {tool_call_timeout}s). The MCP server '{conn.display_name}' did not respond in time."
+            print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> TimeoutError: {error_msg} ({format_duration(call_start)})")
+            raise TimeoutError(error_msg)
         except Exception as e:
             print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)} ({format_duration(call_start)})")
             raise

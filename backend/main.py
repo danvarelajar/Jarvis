@@ -848,10 +848,23 @@ async def chat(request: ChatRequest, req: Request):
                 import json
                 args_preview = json.dumps(tool_call.arguments, separators=(',', ':'))[:100]
                 tool_exec_start = time.time()
-                print(f"[{get_timestamp()}] [TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)")
+                print(f"[{get_timestamp()}] [TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)", flush=True)
                 
-                result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
-                print(f"[{get_timestamp()}] [TOOL] Tool execution completed ({format_duration(tool_exec_start)})")
+                try:
+                    result = await connection_manager.call_tool(server_to_call, real_tool_name, tool_call.arguments)
+                    print(f"[{get_timestamp()}] [TOOL] Tool execution completed ({format_duration(tool_exec_start)})", flush=True)
+                except TimeoutError as e:
+                    error_msg = f"Tool '{canonical_tool_name}' on server '{server_to_call}' timed out after 60 seconds. The server may be unresponsive or overloaded."
+                    print(f"[{get_timestamp()}] [TOOL] Tool execution failed: {error_msg}", flush=True)
+                    current_messages.append({"role": "assistant", "content": response_content})
+                    current_messages.append({"role": "user", "content": f"Tool Error: {error_msg}. Please try again or check if the server is available."})
+                    continue
+                except Exception as e:
+                    error_msg = f"Error executing tool '{canonical_tool_name}': {str(e)}"
+                    print(f"[{get_timestamp()}] [TOOL] Tool execution failed: {error_msg}", flush=True)
+                    current_messages.append({"role": "assistant", "content": response_content})
+                    current_messages.append({"role": "user", "content": f"Tool Error: {error_msg}"})
+                    continue
                 
                     # Extract text content or serialize object
                 tool_output = ""
