@@ -944,13 +944,13 @@ async def chat(request: ChatRequest, req: Request):
                             f"tool={canonical_tool_name}\n"
                             f"{tool_output}\n"
                         "UNTRUSTED_TOOL_RESULT_END\n\n"
-                        "If you have enough information to answer the user's question, return a TEXT response (not JSON) summarizing the results. Only call another tool if you need more information."
+                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 else:
                     tool_result_msg = (
                         f"Tool Result: {tool_output}\n\n"
-                        "If you have enough information to answer the user's question, return a TEXT response (not JSON) summarizing the results. Only call another tool if you need more information."
+                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly."
                     )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 
