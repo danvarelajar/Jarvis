@@ -85,12 +85,22 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     api_key = None
     if provider == "openai":
         api_key = connection_manager.openai_api_key
+    
+    # Extract user query from messages for date detection
+    user_query = ""
+    if messages:
+        for msg in reversed(messages):  # Check from most recent
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                user_query = msg.get("content", "")
+                break
+    
     response_text = await query_llm(
         messages, 
         api_key=api_key, 
         provider=provider, 
         model_url=connection_manager.ollama_url,
-        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
+        user_query=user_query
     )
     
     # Construct result
@@ -670,7 +680,8 @@ async def chat(request: ChatRequest, req: Request):
             model_url=connection_manager.ollama_url,
             model_name=model_name,
             use_qwen_rag=use_qwen_rag,
-            agent_mode=agent_mode
+            agent_mode=agent_mode,
+            user_query=user_message
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
         

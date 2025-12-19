@@ -3,9 +3,10 @@ import json
 from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict, Any, List
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import subprocess
 import time
+import os
 
 def get_timestamp() -> str:
     """Returns a formatted timestamp for logging."""
@@ -59,7 +60,7 @@ RESPONSE GUIDELINES:
 2. WHEN NO TOOL IS NEEDED, respond with plain text (not JSON). For conversational questions, greetings, or requests that don't require tools, just answer naturally.
 3. FORMAT FINAL RESPONSES IN MARKDOWN. After tool execution completes, format your final answer using markdown (headers, lists, code blocks, etc.) for readability.
 
-TOOL USAGE FORMAT:
+TOOL USAGE FORMAT:x
 You MUST output a VALID JSON object in this exact format: {"tool": "tool_name", "arguments": {"key": "value"}}
 Do NOT write any text before or after the JSON when calling a tool.
 Do NOT return error messages like "Tool not found" - if a tool is listed in Available Tools, it exists and you MUST call it using the JSON format above.
@@ -85,7 +86,7 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
     """
     Gets the current date and time.
     
-    VULNERABILITY (Naive Mode): Uses shell command execution which is vulnerable to command injection.
+    VULNERABILITY (Naive Mode): Uses shell command execution with shell=True which is vulnerable to command injection.
     Defender Mode: Uses safe Python datetime module.
     
     Args:
@@ -96,26 +97,37 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
     """
     if agent_mode == "naive":
         # VULNERABLE: Command injection vulnerability
-        # In naive mode, we use shell commands to get the date
-        # This allows attackers to inject commands via the date format or environment
+        # In naive mode, we use shell commands with shell=True and string construction
+        # This allows attackers to inject commands via environment variables or format strings
         try:
-            # Vulnerable: Direct shell execution without proper sanitization
-            # An attacker could potentially inject commands if they control the format string
-            # Example attack: If user input affects the format, they could do: "date; rm -rf /"
+            # VULNERABLE: Read date format from environment variable (could be controlled by attacker)
+            # In a real attack scenario, an attacker might set DATE_FORMAT env var with malicious commands
+            date_format = os.environ.get("DATE_FORMAT", "+%Y-%m-%d")
+            datetime_format = os.environ.get("DATETIME_FORMAT", "+%Y-%m-%d %H:%M:%S")
+            
+            # VULNERABLE: Using shell=True with string concatenation allows command injection
+            # If DATE_FORMAT contains "; command", the shell will execute both commands
+            # Example: DATE_FORMAT="+%Y-%m-%d; echo 'INJECTED'" will execute both date and echo
+            # Note: We don't quote the format string to allow injection (vulnerable by design)
+            date_cmd = f"date {date_format}"
+            datetime_cmd = f"date {datetime_format}"
+            
+            print(f"[VULNERABLE] Naive mode: Executing shell command: {date_cmd}")
             result = subprocess.run(
-                ["date", "+%Y-%m-%d"],
+                date_cmd,
+                shell=True,  # VULNERABLE: shell=True allows command injection
                 capture_output=True,
                 text=True,
-                shell=False,  # Using shell=False is safer, but we're still vulnerable to format injection
                 timeout=2
             )
             current_date = result.stdout.strip()
             
+            print(f"[VULNERABLE] Naive mode: Executing shell command: {datetime_cmd}")
             result2 = subprocess.run(
-                ["date", "+%Y-%m-%d %H:%M:%S"],
+                datetime_cmd,
+                shell=True,  # VULNERABLE: shell=True allows command injection
                 capture_output=True,
                 text=True,
-                shell=False,
                 timeout=2
             )
             current_datetime = result2.stdout.strip()
@@ -133,9 +145,79 @@ def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
             return current_date, current_datetime
     else:
         # Defender mode: Safe Python datetime
+        # Even if DATE_FORMAT env var is set, we ignore it and use safe Python API
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return current_date, current_datetime
+
+def calculate_specific_dates(user_query: str, current_date: str, today: datetime) -> str:
+    """
+    Detects date-related terms in the user query and calculates specific dates.
+    
+    Args:
+        user_query: The user's query text
+        current_date: Current date as string (YYYY-MM-DD)
+        today: Current date as datetime object
+    
+    Returns:
+        Enhanced date context string with specific date calculations
+    """
+    user_lower = user_query.lower()
+    specific_dates = []
+    
+    # Day of week calculations
+    days_of_week = {
+        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+        'friday': 4, 'saturday': 5, 'sunday': 6
+    }
+    
+    # Check for "next [day]" patterns
+    for day_name, day_num in days_of_week.items():
+        if f'next {day_name}' in user_lower or f'next {day_name[:3]}' in user_lower:
+            # Find next occurrence of this day
+            days_ahead = (day_num - today.weekday()) % 7
+            if days_ahead == 0:  # If today is that day, get next week's
+                days_ahead = 7
+            next_day = today + timedelta(days=days_ahead)
+            specific_dates.append(f"- When the user says 'next {day_name}', use: {next_day.strftime('%Y-%m-%d')}")
+    
+    # Check for "this [day]" patterns
+    for day_name, day_num in days_of_week.items():
+        if f'this {day_name}' in user_lower or f'this {day_name[:3]}' in user_lower:
+            # Find this week's occurrence
+            days_ahead = (day_num - today.weekday()) % 7
+            this_day = today + timedelta(days=days_ahead)
+            specific_dates.append(f"- When the user says 'this {day_name}', use: {this_day.strftime('%Y-%m-%d')}")
+    
+    # Check for "in X days" patterns
+    days_match = re.search(r'in (\d+) days?', user_lower)
+    if days_match:
+        days = int(days_match.group(1))
+        future_date = today + timedelta(days=days)
+        specific_dates.append(f"- When the user says 'in {days} days', use: {future_date.strftime('%Y-%m-%d')}")
+    
+    # Check for "X days from now"
+    days_match = re.search(r'(\d+) days? from now', user_lower)
+    if days_match:
+        days = int(days_match.group(1))
+        future_date = today + timedelta(days=days)
+        specific_dates.append(f"- When the user says '{days} days from now', use: {future_date.strftime('%Y-%m-%d')}")
+    
+    # Check for "next week"
+    if 'next week' in user_lower:
+        next_week = today + timedelta(days=7)
+        specific_dates.append(f"- When the user says 'next week', use: {next_week.strftime('%Y-%m-%d')} (7 days from today)")
+    
+    # Check for "in X weeks"
+    weeks_match = re.search(r'in (\d+) weeks?', user_lower)
+    if weeks_match:
+        weeks = int(weeks_match.group(1))
+        future_date = today + timedelta(weeks=weeks)
+        specific_dates.append(f"- When the user says 'in {weeks} weeks', use: {future_date.strftime('%Y-%m-%d')}")
+    
+    if specific_dates:
+        return "\n".join(specific_dates) + "\n"
+    return ""
 
 def retrieve_relevant_tools(user_query: str, all_tools: List[dict], top_k: int = 5) -> List[dict]:
     """
@@ -343,7 +425,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
     """
     Queries the selected LLM provider.
     
@@ -424,7 +506,44 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             
             # Get current date for context (vulnerable to command injection in naive mode)
             current_date, current_datetime = get_current_date(agent_mode)
-            date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
+            
+            # Calculate tomorrow and day after tomorrow for explicit examples
+            try:
+                today = datetime.strptime(current_date, "%Y-%m-%d")
+                tomorrow = today + timedelta(days=1)
+                day_after = today + timedelta(days=2)
+                tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+                day_after_str = day_after.strftime("%Y-%m-%d")
+                current_year = today.year
+            except Exception as e:
+                tomorrow_str = "N/A"
+                day_after_str = "N/A"
+                current_year = current_date[:4] if len(current_date) >= 4 else "2024"
+                today = datetime.now()
+            
+            # Build base date context
+            date_context = (
+                f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
+                f"Today's date: {current_date}\n"
+                f"Current date and time: {current_datetime}\n\n"
+                f"DATE CALCULATIONS:\n"
+                f"- When the user says 'today', use: {current_date}\n"
+                f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
+                f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
+                f"- When the user says 'next week', add 7 days to {current_date}\n"
+            )
+            
+            # Add specific date calculations if user query contains date-related terms
+            if user_query:
+                specific_dates = calculate_specific_dates(user_query, current_date, today)
+                if specific_dates:
+                    date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
+            
+            date_context += (
+                f"\nIMPORTANT: The current year is {current_year}. "
+                f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
+                f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
+            )
             
             # Build final system prompt: fixed instructions + tool context
             if not tools or not relevant_tools:
@@ -439,7 +558,44 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # Legacy Ollama approach
             # Get current date for context (vulnerable to command injection in naive mode)
             current_date, current_datetime = get_current_date(agent_mode)
-            date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
+            
+            # Calculate tomorrow and day after tomorrow for explicit examples
+            try:
+                today = datetime.strptime(current_date, "%Y-%m-%d")
+                tomorrow = today + timedelta(days=1)
+                day_after = today + timedelta(days=2)
+                tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+                day_after_str = day_after.strftime("%Y-%m-%d")
+                current_year = today.year
+            except Exception as e:
+                tomorrow_str = "N/A"
+                day_after_str = "N/A"
+                current_year = current_date[:4] if len(current_date) >= 4 else "2024"
+                today = datetime.now()
+            
+            # Build base date context
+            date_context = (
+                f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
+                f"Today's date: {current_date}\n"
+                f"Current date and time: {current_datetime}\n\n"
+                f"DATE CALCULATIONS:\n"
+                f"- When the user says 'today', use: {current_date}\n"
+                f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
+                f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
+                f"- When the user says 'next week', add 7 days to {current_date}\n"
+            )
+            
+            # Add specific date calculations if user query contains date-related terms
+            if user_query:
+                specific_dates = calculate_specific_dates(user_query, current_date, today)
+                if specific_dates:
+                    date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
+            
+            date_context += (
+                f"\nIMPORTANT: The current year is {current_year}. "
+                f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
+                f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
+            )
             
             ollama_system_prompt = SYSTEM_PROMPT + date_context
             if tools:
@@ -454,7 +610,44 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
     # Construct the full prompt including system instructions (for OpenAI)
     # Get current date for context (vulnerable to command injection in naive mode)
     current_date, current_datetime = get_current_date(agent_mode)
-    date_context = f"\n## CURRENT DATE AND TIME:\nToday's date: {current_date}\nCurrent date and time: {current_datetime}\nWhen the user says 'today', use this date: {current_date}\nWhen the user says 'tomorrow', calculate it from {current_date}\n\n"
+    
+    # Calculate tomorrow and day after tomorrow for explicit examples
+    try:
+        today = datetime.strptime(current_date, "%Y-%m-%d")
+        tomorrow = today + timedelta(days=1)
+        day_after = today + timedelta(days=2)
+        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+        day_after_str = day_after.strftime("%Y-%m-%d")
+        current_year = today.year
+    except Exception as e:
+        tomorrow_str = "N/A"
+        day_after_str = "N/A"
+        current_year = current_date[:4] if len(current_date) >= 4 else "2024"
+        today = datetime.now()
+    
+    # Build base date context
+    date_context = (
+        f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
+        f"Today's date: {current_date}\n"
+        f"Current date and time: {current_datetime}\n\n"
+        f"DATE CALCULATIONS:\n"
+        f"- When the user says 'today', use: {current_date}\n"
+        f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
+        f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
+        f"- When the user says 'next week', add 7 days to {current_date}\n"
+    )
+    
+    # Add specific date calculations if user query contains date-related terms
+    if user_query:
+        specific_dates = calculate_specific_dates(user_query, current_date, today)
+        if specific_dates:
+            date_context += f"\nSPECIFIC DATE CALCULATIONS (based on user query):\n{specific_dates}"
+    
+    date_context += (
+        f"\nIMPORTANT: The current year is {current_year}. "
+        f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
+        f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
+    )
     
     current_system_prompt = SYSTEM_PROMPT + date_context
     if tools:
