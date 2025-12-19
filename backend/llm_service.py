@@ -279,7 +279,7 @@ def retrieve_relevant_tools(user_query: str, all_tools: List[dict], top_k: int =
     scored_tools.sort(key=lambda x: x[0], reverse=True)
     return [tool for _, tool in scored_tools[:top_k]]
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b") -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "gemma3:1B") -> str:
     """
     Queries a local Ollama instance.
     
@@ -287,7 +287,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         messages: List of message dicts
         system_prompt: System prompt to use
         model_url: Ollama server URL
-        model_name: Model name to use (e.g., qwen3:8b, gemma3:8b, etc.)
+        model_name: Model name to use (e.g., gemma3:1B, qwen3:8b, etc.)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
@@ -425,7 +425,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "gemma3:1B", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
     """
     Queries the selected LLM provider.
     
@@ -435,7 +435,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         api_key: API key for providers that need it
         provider: 'openai' or 'ollama'
         model_url: URL for Ollama instance
-        model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
+        model_name: Model name for Ollama (e.g., gemma3:1B, qwen3:8b, etc.)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
         agent_mode: 'defender' (safe) or 'naive' (vulnerable) - affects date retrieval method
     """

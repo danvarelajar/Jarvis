@@ -99,7 +99,7 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
         api_key=api_key, 
         provider=provider, 
         model_url=connection_manager.ollama_url,
-        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
+        model_name=getattr(connection_manager, "ollama_model_name", "gemma3:1B"),
         user_query=user_query
     )
     
@@ -139,7 +139,7 @@ async def get_config():
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url,
-        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
+        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "gemma3:1B"),
         "agentMode": getattr(connection_manager, "agent_mode", "defender")
     }
     for server_key, conn in connection_manager.connections.items():
@@ -228,7 +228,7 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
         return {"error": "Ollama URL is not configured"}
     
     # Use provided model name or fall back to configured model
-    model = model_name or getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+    model = model_name or getattr(connection_manager, "ollama_model_name", "gemma3:1B")
     
     # Ensure URL doesn't have /api/chat suffix
     base_url = url
@@ -652,7 +652,7 @@ async def chat(request: ChatRequest, req: Request):
         use_qwen_rag = (connection_manager.llm_provider == "ollama")
         
         # Get the model name (ensure it's loaded from config)
-        model_name = getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+        model_name = getattr(connection_manager, "ollama_model_name", "gemma3:1B")
         print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: {model_name}")
         
         # In naive mode, allow prompt injection by not filtering user input
