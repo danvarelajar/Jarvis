@@ -170,9 +170,13 @@ async def update_config(request: ConfigRequest):
     
     if request.ollamaModelName is not None:
         candidate = request.ollamaModelName.strip()
+        print(f"[{get_timestamp()}] [DEBUG] Received ollamaModelName in request: '{request.ollamaModelName}' (after strip: '{candidate}')")
         if candidate:
+            old_model = connection_manager.ollama_model_name
             connection_manager.ollama_model_name = candidate
-            print(f"[{get_timestamp()}] [DEBUG] Updated Ollama model name to: {candidate}")
+            print(f"[{get_timestamp()}] [DEBUG] Updated Ollama model name: '{old_model}' -> '{candidate}'")
+        else:
+            print(f"[{get_timestamp()}] [DEBUG] Skipped updating model name (empty after strip)")
     
     if request.agentMode is not None:
         candidate_mode = request.agentMode.strip().lower()
@@ -311,20 +315,25 @@ async def get_ollama_models(ollama_url: str = None):
             process_start = time.time()
             models = []
             if "models" in result:
+                print(f"[{get_timestamp()}] [API] Raw Ollama models response: {[m.get('name', '') for m in result['models']]}")
                 for model in result["models"]:
                     model_name = model.get("name", "")
+                    original_name = model_name
                     # Remove any tags (e.g., "qwen3:8b" from "qwen3:8b:latest")
                     if ":" in model_name:
                         # Keep the tag part (e.g., "qwen3:8b")
                         parts = model_name.split(":")
                         if len(parts) >= 2:
                             model_name = ":".join(parts[:2])
+                    if original_name != model_name:
+                        print(f"[{get_timestamp()}] [API] Normalized model name: '{original_name}' -> '{model_name}'")
                     models.append({
                         "name": model_name,
                         "full_name": model.get("name", ""),
                         "size": model.get("size", 0),
                         "modified_at": model.get("modified_at", "")
                     })
+                print(f"[{get_timestamp()}] [API] Processed model names: {[m['name'] for m in models]}")
             
             process_time = time.time() - process_start
             if process_time > 0.01:
@@ -898,12 +907,12 @@ async def chat(request: ChatRequest, req: Request):
                 current_messages.append({"role": "assistant", "content": response_content})
                 if agent_mode == "defender":
                     tool_result_msg = (
-                        "UNTRUSTED_TOOL_RESULT_BEGIN\n"
-                        f"tool={canonical_tool_name}\n"
-                        f"{tool_output}\n"
+                            "UNTRUSTED_TOOL_RESULT_BEGIN\n"
+                            f"tool={canonical_tool_name}\n"
+                            f"{tool_output}\n"
                         "UNTRUSTED_TOOL_RESULT_END\n\n"
                         "If you have enough information to answer the user's question, return a TEXT response (not JSON) summarizing the results. Only call another tool if you need more information."
-                    )
+                        )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 else:
                     tool_result_msg = (
