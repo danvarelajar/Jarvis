@@ -667,9 +667,12 @@ async def chat(request: ChatRequest, req: Request):
                 # Add explicit instruction to extract location from user query
                 if turn_index == 0:  # Only on first turn
                     location_instruction = (
-                        f"\n\n**WEATHER FLOW STEP 1:** Extract the location/city name from the user's query "
-                        f"and call 'weather__search_location' with that location. "
-                        f"The user mentioned: '{user_message}'. Extract the location name and call the tool now."
+                        f"\n\n🚨 CRITICAL: WEATHER FLOW STEP 1 - YOU MUST CALL THE TOOL NOW 🚨\n"
+                        f"You MUST call 'weather__search_location' with the location name from the user's query. "
+                        f"The user asked about: '{user_message}'. Extract the location name (e.g., 'Madrid') and call the tool immediately. "
+                        f"DO NOT generate weather data yourself. DO NOT return text. You MUST output JSON to call 'weather__search_location' with the location parameter. "
+                        f"If several locations are returned ask right away which one the user is referring to. "
+                        f"Example: {{\"tool\": \"weather__search_location\", \"arguments\": {{\"city\": \"Madrid\"}}}}"
                     )
                     if current_messages and current_messages[-1].get("role") == "user":
                         current_messages[-1]["content"] += location_instruction
