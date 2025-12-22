@@ -1153,7 +1153,7 @@ async def chat(request: ChatRequest, req: Request):
                                 )
                         current_messages.append({"role": "user", "content": tool_result_msg})
                 elif canonical_tool_name == "weather__get_complete_forecast":
-                    # Weather forecast tool completed - provide detailed response instructions
+                    # Weather forecast tool completed - provide highlight of all information
                     if agent_mode == "defender":
                         tool_result_msg = (
                             "UNTRUSTED_TOOL_RESULT_BEGIN\n"
@@ -1161,29 +1161,27 @@ async def chat(request: ChatRequest, req: Request):
                             f"{tool_output}\n"
                             "UNTRUSTED_TOOL_RESULT_END\n\n"
                             "CRITICAL: You have received the complete weather forecast data above. You now have all the information needed to answer the user's question. "
-                            "DO NOT call any more tools. Return a DETAILED TEXT response (not JSON, no code blocks) with comprehensive weather information. "
-                            "Include ALL available details from the weather data such as:\n"
-                            "- Current temperature and conditions\n"
-                            "- Humidity, wind speed and direction\n"
-                            "- Visibility and pressure if available\n"
-                            "- Forecast for today and upcoming days if provided\n"
-                            "- Any weather alerts or warnings\n"
-                            "- Use markdown formatting (headers, lists, bold text) for better readability\n"
-                            "Format your response clearly with sections. Be thorough and include all relevant weather details from the data."
+                            "DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) that provides a HIGHLIGHT of all the key information from the weather data. "
+                            "Include a concise summary covering:\n"
+                            "- Current temperature and weather conditions\n"
+                            "- Humidity, wind speed and direction (if available)\n"
+                            "- Visibility and pressure (if available)\n"
+                            "- Forecast summary for today and next few days (if provided)\n"
+                            "- Any weather alerts or warnings (if present)\n"
+                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability."
                         )
                     else:
                         tool_result_msg = (
                             f"Tool Result: {tool_output}\n\n"
                             "CRITICAL: You have received the complete weather forecast data above. You now have all the information needed to answer the user's question. "
-                            "DO NOT call any more tools. Return a DETAILED TEXT response (not JSON, no code blocks) with comprehensive weather information. "
-                            "Include ALL available details from the weather data such as:\n"
-                            "- Current temperature and conditions\n"
-                            "- Humidity, wind speed and direction\n"
-                            "- Visibility and pressure if available\n"
-                            "- Forecast for today and upcoming days if provided\n"
-                            "- Any weather alerts or warnings\n"
-                            "- Use markdown formatting (headers, lists, bold text) for better readability\n"
-                            "Format your response clearly with sections. Be thorough and include all relevant weather details from the data."
+                            "DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) that provides a HIGHLIGHT of all the key information from the weather data. "
+                            "Include a concise summary covering:\n"
+                            "- Current temperature and weather conditions\n"
+                            "- Humidity, wind speed and direction (if available)\n"
+                            "- Visibility and pressure (if available)\n"
+                            "- Forecast summary for today and next few days (if provided)\n"
+                            "- Any weather alerts or warnings (if present)\n"
+                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 elif agent_mode == "defender":
