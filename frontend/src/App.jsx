@@ -25,6 +25,33 @@ function App() {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
 
+    // Clean markdown content: remove code block wrappers that contain markdown/text
+    const cleanMarkdownContent = (content) => {
+        if (!content || typeof content !== 'string') return content;
+        
+        // Remove markdown code blocks that wrap text/markdown content
+        // Pattern: ```text\n...\n``` or ```markdown\n...\n``` or ```\n...\n```
+        const codeBlockPattern = /^```(?:text|markdown|md)?\n([\s\S]*?)\n```$/;
+        const match = content.trim().match(codeBlockPattern);
+        
+        if (match) {
+            // If the content is wrapped in a code block, extract the inner content
+            return match[1];
+        }
+        
+        // Also handle cases where there might be leading/trailing whitespace
+        const trimmed = content.trim();
+        if (trimmed.startsWith('```') && trimmed.endsWith('```')) {
+            const lines = trimmed.split('\n');
+            if (lines.length > 2 && lines[0].startsWith('```')) {
+                // Remove first and last lines (code block markers)
+                return lines.slice(1, -1).join('\n');
+            }
+        }
+        
+        return content;
+    };
+
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
@@ -552,7 +579,7 @@ function App() {
                                             }
                                         }}
                                     >
-                                        {msg.content}
+                                        {cleanMarkdownContent(msg.content)}
                                     </ReactMarkdown>
                                 </div>
                                 {msg.tool_result && (

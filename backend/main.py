@@ -1168,7 +1168,8 @@ async def chat(request: ChatRequest, req: Request):
                             "- Visibility and pressure (if available)\n"
                             "- Forecast summary for today and next few days (if provided)\n"
                             "- Any weather alerts or warnings (if present)\n"
-                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability."
+                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability. "
+                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly."
                         )
                     else:
                         tool_result_msg = (
@@ -1181,7 +1182,8 @@ async def chat(request: ChatRequest, req: Request):
                             "- Visibility and pressure (if available)\n"
                             "- Forecast summary for today and next few days (if provided)\n"
                             "- Any weather alerts or warnings (if present)\n"
-                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability."
+                            "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability. "
+                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 elif agent_mode == "defender":
