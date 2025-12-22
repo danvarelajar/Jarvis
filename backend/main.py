@@ -1172,7 +1172,8 @@ async def chat(request: ChatRequest, req: Request):
                             "- Forecast summary for today and next few days (if provided)\n"
                             "- Any weather alerts or warnings (if present)\n"
                             "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability. "
-                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly."
+                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly. "
+                            "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
                         )
                     else:
                         tool_result_msg = (
@@ -1186,7 +1187,8 @@ async def chat(request: ChatRequest, req: Request):
                             "- Forecast summary for today and next few days (if provided)\n"
                             "- Any weather alerts or warnings (if present)\n"
                             "Format your response clearly but concisely. Highlight all the important information from the data without being overly verbose. Use markdown formatting (headers, lists) for readability. "
-                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly."
+                            "IMPORTANT: Return the markdown directly, do NOT wrap it in code blocks (do NOT use ```text or ```markdown). Just return the formatted markdown text directly. "
+                            "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 elif agent_mode == "defender":
@@ -1195,13 +1197,15 @@ async def chat(request: ChatRequest, req: Request):
                             f"tool={canonical_tool_name}\n"
                             f"{tool_output}\n"
                         "UNTRUSTED_TOOL_RESULT_END\n\n"
-                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly."
+                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly. "
+                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 else:
                     tool_result_msg = (
                         f"Tool Result: {tool_output}\n\n"
-                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly."
+                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Example: 'Based on the weather data, Madrid Spain has...' - just write the answer directly. "
+                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
                     )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 

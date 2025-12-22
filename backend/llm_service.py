@@ -32,6 +32,10 @@ MCP_ROUTER_SYSTEM_PROMPT = """You are an MCP router and caller. Your role is to:
 4. If tools ARE provided, the user used @server_name - you can call tools if needed
 5. Extract parameters from the user's request if calling a tool
 
+LANGUAGE REQUIREMENT:
+- You MUST respond in ENGLISH only. The user's language is English, and all responses must be in English.
+- Do NOT respond in Arabic, Spanish, or any other language - ONLY English.
+
 CRITICAL RULES:
 - If the "MCP TOOL DOCUMENTATION" section is empty or says "No tools available", respond with TEXT only (no JSON)
 - If the user's question is conversational (greetings, "how are you", general questions without @server_name), respond with TEXT only (no JSON)
@@ -55,6 +59,10 @@ OUTPUT FORMAT:
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
 YOUR GOAL: Execute the user's intent as EFFICIENTLY as possible.
+
+LANGUAGE REQUIREMENT:
+- You MUST respond in ENGLISH only. The user's language is English, and all responses must be in English.
+- Do NOT respond in Arabic, Spanish, or any other language - ONLY English.
 
 RESPONSE GUIDELINES:
 1. CALL TOOLS IMMEDIATELY - no conversational preamble. If the user asks for something that requires a tool, output ONLY the JSON tool call (no "I'll help you..." or "Let me check..." text).
