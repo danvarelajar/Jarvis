@@ -14,8 +14,8 @@ function App() {
     const [isConfigExpanded, setIsConfigExpanded] = useState(false);
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [llmProvider, setLlmProvider] = useState('openai');
-    const [ollamaUrl, setOllamaUrl] = useState('http://10.3.0.7:11434');
-    const [ollamaModelName, setOllamaModelName] = useState('qwen3:8b');
+    const [ollamaUrl, setOllamaUrl] = useState('http://ollama.fortinet.demo:11434');
+    const [ollamaModelName, setOllamaModelName] = useState('gemma3:1B');
     const [ollamaModels, setOllamaModels] = useState([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
     const [agentMode, setAgentMode] = useState('defender');
@@ -532,6 +532,7 @@ function App() {
                                     <style>{`
                                         .prose {
                                             max-width: 100% !important;
+                                            color: inherit !important;
                                         }
                                         .prose * {
                                             max-width: 100% !important;
@@ -539,14 +540,44 @@ function App() {
                                             overflow-wrap: break-word;
                                             word-break: break-word;
                                         }
+                                        .prose h1, .prose h2, .prose h3, .prose h4 {
+                                            font-weight: 600 !important;
+                                            margin-top: 1em !important;
+                                            margin-bottom: 0.5em !important;
+                                            color: inherit !important;
+                                        }
+                                        .prose h1 { font-size: 1.5em !important; }
+                                        .prose h2 { font-size: 1.3em !important; }
+                                        .prose h3 { font-size: 1.1em !important; }
+                                        .prose strong {
+                                            font-weight: 600 !important;
+                                            color: inherit !important;
+                                        }
                                         .prose ul, .prose ol {
                                             max-width: 100%;
                                             overflow-wrap: break-word;
+                                            margin: 0.5em 0 !important;
+                                            padding-left: 1.5em !important;
+                                        }
+                                        .prose li {
+                                            margin: 0.25em 0 !important;
+                                            padding-left: 0.25em !important;
+                                        }
+                                        .prose ul li {
+                                            list-style-type: disc !important;
+                                        }
+                                        .prose ol li {
+                                            list-style-type: decimal !important;
+                                        }
+                                        .prose p {
+                                            margin: 0.5em 0 !important;
+                                            line-height: 1.5 !important;
                                         }
                                         .prose table {
                                             display: block;
                                             overflow-x: auto;
                                             max-width: 100%;
+                                            margin: 1em 0 !important;
                                         }
                                         .prose pre {
                                             max-width: 100%;
@@ -558,6 +589,14 @@ function App() {
                                     <ReactMarkdown
                                         remarkPlugins={[remarkGfm]}
                                         components={{
+                                            h1: ({node, ...props}) => <h1 className="font-semibold text-lg mt-4 mb-2" {...props} />,
+                                            h2: ({node, ...props}) => <h2 className="font-semibold text-base mt-3 mb-2" {...props} />,
+                                            h3: ({node, ...props}) => <h3 className="font-semibold text-sm mt-2 mb-1" {...props} />,
+                                            p: ({node, ...props}) => <p className="my-2 leading-relaxed" {...props} />,
+                                            ul: ({node, ...props}) => <ul className="list-disc pl-5 my-2 space-y-1" {...props} />,
+                                            ol: ({node, ...props}) => <ol className="list-decimal pl-5 my-2 space-y-1" {...props} />,
+                                            li: ({node, ...props}) => <li className="ml-2" {...props} />,
+                                            strong: ({node, ...props}) => <strong className="font-semibold" {...props} />,
                                             code({ node, inline, className, children, ...props }) {
                                                 const match = /language-(\w+)/.exec(className || '')
                                                 return !inline && match ? (
