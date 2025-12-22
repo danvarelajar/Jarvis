@@ -626,6 +626,24 @@ async def chat(request: ChatRequest, req: Request):
     # Track if we're in loop detection mode (tools removed due to repeated tool calls)
     loop_detected = False
     
+    # Weather tool flow state: enforce two-step process
+    # Step 1: Only show weather__search_location (user has location name)
+    # Step 2: Only show weather__get_complete_forecast (coordinates available)
+    weather_flow_state = None  # None, "need_search", "need_forecast"
+    weather_coordinates = None  # Store coordinates from search_location result
+    
+    # Detect if this is a weather query
+    has_weather_tools = any("weather__" in t.get("name", "") for t in tools)
+    if has_weather_tools:
+        # Check if user query contains a location name (not coordinates)
+        user_message_lower = user_message.lower()
+        # Simple heuristic: if query mentions weather and a location name (not numbers/coordinates)
+        if any(word in user_message_lower for word in ["weather", "forecast", "temperature", "rain", "sunny", "cloudy"]):
+            # Check if it's a location name (contains text, not just numbers)
+            # If user mentions a city/location, we need step 1
+            weather_flow_state = "need_search"
+            print(f"[{get_timestamp()}] [WEATHER_FLOW] Detected weather query - enforcing two-step flow: Step 1 (search_location)", flush=True)
+    
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
         turn_start = time.time()
@@ -637,6 +655,31 @@ async def chat(request: ChatRequest, req: Request):
                 print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM (loop detected - text only mode)")
             else:
                 print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
+        
+        # Weather flow: Filter tools based on current step
+        # Only filter weather tools, keep all other tools available
+        tools_to_send = tools.copy() if tools else []
+        if weather_flow_state == "need_search":
+            # Step 1: Hide weather__get_complete_forecast, keep weather__search_location and all other tools
+            tools_to_send = [t for t in tools_to_send if "weather__get_complete_forecast" not in t.get("name", "")]
+            if any("weather__" in t.get("name", "") for t in tools_to_send):
+                print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 1: Only exposing 'weather__search_location' (hiding 'weather__get_complete_forecast')", flush=True)
+                # Add explicit instruction to extract location from user query
+                if turn_index == 0:  # Only on first turn
+                    location_instruction = (
+                        f"\n\n**WEATHER FLOW STEP 1:** Extract the location/city name from the user's query "
+                        f"and call 'weather__search_location' with that location. "
+                        f"The user mentioned: '{user_message}'. Extract the location name and call the tool now."
+                    )
+                    if current_messages and current_messages[-1].get("role") == "user":
+                        current_messages[-1]["content"] += location_instruction
+                    else:
+                        current_messages.append({"role": "user", "content": location_instruction})
+        elif weather_flow_state == "need_forecast":
+            # Step 2: Hide weather__search_location, keep weather__get_complete_forecast and all other tools
+            tools_to_send = [t for t in tools_to_send if "weather__search_location" not in t.get("name", "")]
+            if any("weather__" in t.get("name", "") for t in tools_to_send):
+                print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 2: Only exposing 'weather__get_complete_forecast' (hiding 'weather__search_location')", flush=True)
         
         # Query LLM
         # Enable Qwen RAG approach when using Ollama provider
@@ -665,7 +708,7 @@ async def chat(request: ChatRequest, req: Request):
         
         response_content = await query_llm(
             messages_to_send, 
-            tools, 
+            tools_to_send,  # Use filtered tools based on weather flow state
             api_key=api_key, 
             provider=connection_manager.llm_provider, 
             model_url=connection_manager.ollama_url,
@@ -696,27 +739,36 @@ async def chat(request: ChatRequest, req: Request):
             # Resolve tool name case-insensitively against discovered tools.
             # This avoids requiring the model/user to match server prefix casing exactly
             # (e.g., "booking__x" vs "Booking__x").
+            # Use tools_to_send (filtered) for validation, but tools (original) for execution
             requested_tool_name = tool_call.tool
-            tool_def = next((t for t in tools if t.get("name", "").lower() == requested_tool_name.lower()), None)
+            tool_def = next((t for t in tools_to_send if t.get("name", "").lower() == requested_tool_name.lower()), None)
             canonical_tool_name = tool_def["name"] if tool_def else requested_tool_name
             
             # If the model tries to call an un-namespaced tool (e.g. "simulate_tool_injection")
             # but we only advertised namespaced tools (e.g. "Booking__simulate_tool_injection"),
             # find the best match so we can still validate against the real inputSchema.
+            # Also check original tools list for suffix matching (in case tool was filtered)
             suffix_match = None
             if not tool_def and tools and "__" not in requested_tool_name:
+                # First check filtered tools
                 suffix_match = next(
-                    (t for t in tools if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
+                    (t for t in tools_to_send if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
                     None
                 )
+                # If not found, check original tools list (for weather flow, tool might be hidden)
+                if not suffix_match:
+                    suffix_match = next(
+                        (t for t in tools if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
+                        None
+                    )
             if suffix_match:
                 tool_def = suffix_match
                 canonical_tool_name = suffix_match.get("name") or canonical_tool_name
 
             # VALIDATION: Reject hallucinated tool names before execution
-            if not tool_def and tools:
+            if not tool_def and tools_to_send:
                 # Tool name doesn't exist - this is a hallucination
-                available_names = [t.get("name", "unknown") for t in tools]
+                available_names = [t.get("name", "unknown") for t in tools_to_send]
                 available_list = ", ".join([f"'{name}'" for name in available_names])
                 error_msg = (
                     f"ERROR: Tool '{requested_tool_name}' does not exist. "
@@ -979,13 +1031,60 @@ async def chat(request: ChatRequest, req: Request):
                     # Fallback: return raw simulator output if we can't parse it.
                     return {"role": "assistant", "content": tool_output}
 
+                # Weather flow: Handle state transitions
+                if weather_flow_state == "need_search" and canonical_tool_name == "weather__search_location":
+                    # Step 1 completed: Extract coordinates from result and transition to step 2
+                    try:
+                        # Try to parse coordinates from tool output
+                        import json
+                        result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                        if isinstance(result_data, dict):
+                            # Look for latitude/longitude in the result
+                            lat = result_data.get("latitude") or result_data.get("lat")
+                            lon = result_data.get("longitude") or result_data.get("lon") or result_data.get("lng")
+                            if lat is not None and lon is not None:
+                                weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
+                                weather_flow_state = "need_forecast"
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 1 completed: Extracted coordinates {weather_coordinates}, transitioning to Step 2", flush=True)
+                            else:
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Warning: Could not extract coordinates from search_location result", flush=True)
+                    except Exception as e:
+                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Error extracting coordinates: {e}", flush=True)
+                elif weather_flow_state == "need_forecast" and canonical_tool_name == "weather__get_complete_forecast":
+                    # Step 2 completed: Weather flow is done
+                    weather_flow_state = None
+                    weather_coordinates = None
+                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 2 completed: Weather flow finished", flush=True)
+                
                 # Feed result back to LLM
                 print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
                 if len(tool_output) < 200:
                     print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Result Preview: {tool_output}")
                 
                 current_messages.append({"role": "assistant", "content": response_content})
-                if agent_mode == "defender":
+                
+                # Weather flow: Customize message based on step
+                if weather_flow_state == "need_forecast" and canonical_tool_name == "weather__search_location":
+                    # Step 1 completed: Instruct LLM to call get_complete_forecast with coordinates
+                    if weather_coordinates:
+                        lat = weather_coordinates['latitude']
+                        lon = weather_coordinates['longitude']
+                        tool_result_msg = (
+                            f"Tool Result: {tool_output}\n\n"
+                            f"CRITICAL: You have received coordinates from weather__search_location. "
+                            f"You MUST now call 'weather__get_complete_forecast' with these exact coordinates: "
+                            f"latitude={lat}, longitude={lon}. "
+                            f"Output ONLY the JSON tool call: {{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}"
+                        )
+                    else:
+                        # Fallback if coordinates extraction failed
+                        tool_result_msg = (
+                            f"Tool Result: {tool_output}\n\n"
+                            "CRITICAL: You have received location search results. Extract the latitude and longitude coordinates from the result above, "
+                            "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
+                        )
+                    current_messages.append({"role": "user", "content": tool_result_msg})
+                elif agent_mode == "defender":
                     tool_result_msg = (
                             "UNTRUSTED_TOOL_RESULT_BEGIN\n"
                             f"tool={canonical_tool_name}\n"
