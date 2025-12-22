@@ -467,11 +467,10 @@ async def chat(request: ChatRequest, req: Request):
             try:
                 server_tools = await connection_manager.list_tools(server)
                 tools.extend(server_tools)
-                print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
-            except TimeoutError as te:
-                print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for {server}: {te}", flush=True)
+                if server_tools:
+                    print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
             except Exception as e:
-                print(f"[{get_timestamp()}] [ERROR] Error loading tools for {server}: {e}", flush=True)
+                print(f"[{get_timestamp()}] [ERROR] Failed to load tools from @{server}: {e}", flush=True)
     elif target_server:
         # Defender mode: explicitly block local shell tool execution.
         if agent_mode == "defender" and target_server == "shell":
@@ -497,20 +496,12 @@ async def chat(request: ChatRequest, req: Request):
             try:
                 import asyncio
                 for attempt in range(10):  # ~3s max
-                    try:
-                        tools = await connection_manager.list_tools(target_server)
-                        if tools:
-                            break
-                    except TimeoutError as te:
-                        print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for {target_server}: {te}", flush=True)
-                        tools = []
-                        break  # Don't retry on timeout, server is unresponsive
-                    except Exception as e:
-                        print(f"[{get_timestamp()}] [ERROR] Error loading tools for {target_server} (attempt {attempt + 1}/10): {e}", flush=True)
-                        tools = []
+                    tools = await connection_manager.list_tools(target_server)
+                    if tools:
+                        break
                     await asyncio.sleep(0.3)
             except Exception as e:
-                print(f"[{get_timestamp()}] [ERROR] Fatal error loading tools for {target_server}: {e}", flush=True)
+                print(f"[{get_timestamp()}] [ERROR] Failed to load tools for {target_server}: {e}", flush=True)
                 tools = []
 
             print(f"DEBUG: Tools loaded for '{target_server}': {len(tools)}")
@@ -531,11 +522,8 @@ async def chat(request: ChatRequest, req: Request):
             # Naive: load all tools across all servers (intentionally permissive for lab demos)
             try:
                 tools = await connection_manager.list_tools()
-            except TimeoutError as te:
-                print(f"[{get_timestamp()}] [ERROR] Timeout loading all tools: {te}", flush=True)
-                tools = []
             except Exception as e:
-                print(f"[{get_timestamp()}] [ERROR] Error loading all tools: {e}", flush=True)
+                print(f"[{get_timestamp()}] [ERROR] Failed to load tools: {e}", flush=True)
                 tools = []
         else:
             # Defender: least privilege—no tools unless the user explicitly routes to a server.
@@ -769,11 +757,8 @@ async def chat(request: ChatRequest, req: Request):
                 if not server_to_call:
                     try:
                         all_tools = await connection_manager.list_tools()
-                    except TimeoutError as te:
-                        print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for fallback search: {te}", flush=True)
-                        all_tools = []
                     except Exception as e:
-                        print(f"[{get_timestamp()}] [ERROR] Error loading tools for fallback search: {e}", flush=True)
+                        print(f"[{get_timestamp()}] [ERROR] Failed to load tools for fallback search: {e}", flush=True)
                         all_tools = []
                     # This is tricky because now all tools in list are namespaced.
                     # So if the LLM hallucinated a non-namespaced tool, we might fail.

@@ -211,21 +211,20 @@ class PersistentConnection:
             
         try:
             list_start = time.time()
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools()")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools()", flush=True)
             
             # Add timeout to prevent indefinite hanging (30 seconds should be enough for list_tools)
             list_tools_timeout = 30.0  # 30 seconds
             try:
-                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Waiting for list_tools response (timeout: {list_tools_timeout}s)...", flush=True)
                 result = await asyncio.wait_for(
                     self.session.list_tools(),
                     timeout=list_tools_timeout
                 )
             except asyncio.TimeoutError:
                 elapsed = time.time() - list_start
-                error_msg = f"list_tools() timed out after {elapsed:.1f}s (timeout: {list_tools_timeout}s). The MCP server '{self.display_name}' did not respond in time."
-                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error: list_tools() -> TimeoutError: {error_msg} ({format_duration(list_start)})", flush=True)
-                raise TimeoutError(error_msg)
+                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ⚠️  Timeout after {elapsed:.1f}s - server unresponsive ({format_duration(list_start)})", flush=True)
+                # Return empty list instead of raising - caller will handle gracefully
+                return []
             
             self.tools_cache = []
             for t in result.tools:
@@ -236,15 +235,11 @@ class PersistentConnection:
                 self.tools_cache.append(tool_dump)
                 
             self.tools_cache_timestamp = current_time
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})", flush=True)
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ✓ list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})", flush=True)
             return self.tools_cache
-        except TimeoutError:
-            # Re-raise timeout errors so caller can handle them
-            raise
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing tools: {e}", flush=True)
+            # Log unexpected errors but don't crash - return empty list
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ✗ Error listing tools: {e}", flush=True)
             return []
 
     async def get_resources(self):
