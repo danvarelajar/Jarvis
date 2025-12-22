@@ -703,6 +703,7 @@ async def chat(request: ChatRequest, req: Request):
             # If the model tries to call an un-namespaced tool (e.g. "simulate_tool_injection")
             # but we only advertised namespaced tools (e.g. "Booking__simulate_tool_injection"),
             # find the best match so we can still validate against the real inputSchema.
+            suffix_match = None
             if not tool_def and tools and "__" not in requested_tool_name:
                 suffix_match = next(
                     (t for t in tools if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
