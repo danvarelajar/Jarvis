@@ -47,6 +47,9 @@ CRITICAL RULES:
 
 OUTPUT FORMAT:
 - For tool calls (ONLY when tools are available AND needed): {"tool": "exact_tool_name", "arguments": {"param1": "value1"}}
+  **CRITICAL: ALL parameters MUST be inside the "arguments" object. Do NOT put parameters at the top level.**
+  **CORRECT:** {"tool": "weather__get_complete_forecast", "arguments": {"latitude": 40.4, "longitude": -3.7}}
+  **WRONG:** {"tool": "weather__get_complete_forecast", "latitude": 40.4, "longitude": -3.7}
 - For text responses (when no tools needed or no tools available): Just return plain text (no JSON, no code blocks)
 """
 
@@ -61,8 +64,11 @@ RESPONSE GUIDELINES:
 2. WHEN NO TOOL IS NEEDED, respond with plain text (not JSON). For conversational questions, greetings, or requests that don't require tools, just answer naturally.
 3. FORMAT FINAL RESPONSES IN MARKDOWN. After tool execution completes, format your final answer using markdown (headers, lists, code blocks, etc.) for readability.
 
-TOOL USAGE FORMAT:x
+TOOL USAGE FORMAT:
 You MUST output a VALID JSON object in this exact format: {"tool": "tool_name", "arguments": {"key": "value"}}
+**CRITICAL: ALL parameters MUST be inside the "arguments" object. Do NOT put parameters at the top level.**
+**CORRECT:** {"tool": "weather__get_complete_forecast", "arguments": {"latitude": 40.4, "longitude": -3.7}}
+**WRONG:** {"tool": "weather__get_complete_forecast", "latitude": 40.4, "longitude": -3.7}
 Do NOT write any text before or after the JSON when calling a tool.
 Do NOT return error messages like "Tool not found" - if a tool is listed in Available Tools, it exists and you MUST call it using the JSON format above.
 
@@ -464,7 +470,18 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 for tool in relevant_tools:
                     tool_name = tool.get('name', 'unknown')
                     tool_context += f"### Tool: {tool_name}\n"
-                    tool_context += f"Description: {tool.get('description', 'No description')}\n\n"
+                    tool_context += f"Description: {tool.get('description', 'No description')}\n"
+                    
+                    # Add tool sequence/dependency information if it's a weather tool
+                    if tool_name == "weather__get_complete_forecast":
+                        tool_context += f"\n**⚠️  IMPORTANT: This tool requires coordinates (latitude/longitude). "
+                        tool_context += f"You MUST call 'weather__search_location' FIRST to get coordinates, "
+                        tool_context += f"then use those coordinates to call this tool. Do NOT invent or hallucinate coordinates.**\n"
+                    elif tool_name == "weather__search_location":
+                        tool_context += f"\n**⚠️  IMPORTANT: Call this tool FIRST to get coordinates for a location, "
+                        tool_context += f"then use those coordinates with 'weather__get_complete_forecast'.**\n"
+                    
+                    tool_context += "\n"
                     
                     # Extract and format input schema with explicit parameter names
                     input_schema = tool.get('inputSchema', {})
@@ -588,6 +605,16 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 ollama_system_prompt += f"\n\n## AVAILABLE TOOLS:\n\n**CRITICAL: EXACT TOOL NAMES (use EXACTLY as shown):**\n{tool_names_list}\n\n"
                 ollama_system_prompt += f"**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
                 ollama_system_prompt += f"**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location' or 'weather__find_location'.**\n\n"
+                
+                # Add tool sequence warnings
+                has_weather_forecast = any("weather__get_complete_forecast" in t.get('name', '') for t in tools)
+                has_weather_search = any("weather__search_location" in t.get('name', '') for t in tools)
+                if has_weather_forecast and has_weather_search:
+                    ollama_system_prompt += f"**⚠️  TOOL SEQUENCE REQUIREMENT:**\n"
+                    ollama_system_prompt += f"- You MUST call 'weather__search_location' FIRST to get coordinates for a location\n"
+                    ollama_system_prompt += f"- Then use those coordinates to call 'weather__get_complete_forecast'\n"
+                    ollama_system_prompt += f"- Do NOT invent or hallucinate coordinates. Always get them from 'weather__search_location' first.\n\n"
+                
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\nYou MUST use these tools to answer queries. Use the EXACT tool names listed above. Do not say you cannot access them. Just output the JSON to call them."
             else:
@@ -712,14 +739,31 @@ def parse_llm_response(response_content: str) -> dict:
 
         data = json.loads(json_str)
         
+        # Check if tool call format is malformed (parameters at top level instead of in "arguments")
+        if "tool" in data and "arguments" not in data:
+            # Try to fix: move all non-"tool" fields into "arguments"
+            tool_name = data.pop("tool")
+            arguments = data  # Everything else becomes arguments
+            data = {"tool": tool_name, "arguments": arguments}
+            print(f"[{get_timestamp()}] [PARSE] Fixed malformed tool call: moved parameters into 'arguments' object", flush=True)
+        
         # Validate with Pydantic
-        tool_call = ToolCall(**data)
-        return {"type": "tool_call", "data": tool_call}
+        try:
+            tool_call = ToolCall(**data)
+            return {"type": "tool_call", "data": tool_call}
+        except ValidationError as ve:
+            # If validation fails, try to provide helpful error
+            print(f"[{get_timestamp()}] [PARSE] Tool call validation failed: {ve}", flush=True)
+            if "tool" in data:
+                return {"type": "error", "message": f"Invalid tool call format. Expected {{'tool': 'name', 'arguments': {{...}}}}. Got: {json.dumps(data)[:200]}"}
+            raise  # Re-raise to be caught by outer except
         
     except (json.JSONDecodeError, ValidationError):
         # If it's not valid JSON or doesn't match the schema, treat as text
         # But if it looks like it tried to be JSON (starts with {), return error
-        if response_content.strip().startswith("{"):
-             return {"type": "error", "message": "System Error: Failed to parse tool call."}
+        if response_content.strip().startswith("{") or "```json" in response_content:
+            error_msg = "System Error: Failed to parse tool call. Expected format: {\"tool\": \"tool_name\", \"arguments\": {...}}. All parameters must be inside the 'arguments' object."
+            print(f"[{get_timestamp()}] [PARSE] {error_msg}", flush=True)
+            return {"type": "error", "message": error_msg}
         
         return {"type": "text", "content": response_content}
