@@ -471,22 +471,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     tool_name = tool.get('name', 'unknown')
                     tool_context += f"### Tool: {tool_name}\n"
                     tool_context += f"Description: {tool.get('description', 'No description')}\n"
-                    
-                    # Add tool sequence/dependency information if it's a weather tool
-                    if tool_name == "weather__get_complete_forecast":
-                        tool_context += f"\n**🚨 CRITICAL TOOL SEQUENCE REQUIREMENT:**\n"
-                        tool_context += f"1. This tool REQUIRES coordinates (latitude/longitude) - it does NOT accept location names\n"
-                        tool_context += f"2. You MUST call 'weather__search_location' FIRST with the location name to get coordinates\n"
-                        tool_context += f"3. Then use the coordinates from that result to call this tool\n"
-                        tool_context += f"4. Do NOT invent, hallucinate, or guess coordinates\n"
-                        tool_context += f"5. Do NOT add 'location' parameter to this tool - it only accepts latitude and longitude\n"
-                        tool_context += f"**If you have a location name but no coordinates, call 'weather__search_location' first!**\n"
-                    elif tool_name == "weather__search_location":
-                        tool_context += f"\n**🚨 CRITICAL: This is the FIRST tool you must call when the user asks for weather at a location name.**\n"
-                        tool_context += f"1. Call this tool FIRST with the location name\n"
-                        tool_context += f"2. Use the coordinates from the result to call 'weather__get_complete_forecast'\n"
-                        tool_context += f"3. Do NOT skip this step - you cannot get weather without coordinates\n"
-                    
                     tool_context += "\n"
                     
                     # Extract and format input schema with explicit parameter names
@@ -512,30 +496,18 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     
                     tool_context += f"\n**Full Input Schema (JSON):**\n```json\n{json.dumps(input_schema, indent=2)}\n```\n\n"
                     # List exact parameter names to emphasize
+                    # Note: Weather tool sequence enforcement is handled by main.py via tool filtering and state machine
                     exact_params = list(properties.keys())
                     if exact_params:
                         param_list = ", ".join([f"'{p}'" for p in exact_params])
-                        
-                        # Special handling for weather__get_complete_forecast to prevent location parameter hallucination
-                        if tool_name == "weather__get_complete_forecast":
-                            tool_context += (
-                                f"**🚨 CRITICAL PARAMETER RESTRICTIONS FOR THIS TOOL:**\n"
-                                f"1. This tool ONLY accepts these exact parameters: {param_list}\n"
-                                f"2. This tool does NOT accept 'location', 'city', 'address', 'place', or any location name parameter\n"
-                                f"3. If you have a location name, you MUST call 'weather__search_location' FIRST to get coordinates\n"
-                                f"4. Do NOT add 'location' parameter - it will be rejected and cause an error\n"
-                                f"5. Do NOT invent or guess coordinates - you must get them from 'weather__search_location'\n"
-                                f"6. Use ONLY these parameters: {param_list} - nothing else\n\n"
-                            )
-                        else:
-                            tool_context += (
-                                f"**CRITICAL PARAMETER RULES:**\n"
-                                f"1. Use ONLY these exact parameter names: {param_list}\n"
-                                f"2. Do NOT use synonyms (e.g., 'origin'/'destination'/'city' - use 'from'/'to')\n"
-                                f"3. Do NOT add parameters that are NOT in this list (e.g., do NOT add 'city' if it's not listed)\n"
-                                f"4. If a parameter is not in the list above, DO NOT include it in your tool call\n"
-                                f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n\n"
-                            )
+                        tool_context += (
+                            f"**CRITICAL PARAMETER RULES:**\n"
+                            f"1. Use ONLY these exact parameter names: {param_list}\n"
+                            f"2. Do NOT use synonyms (e.g., 'origin'/'destination'/'city' - use 'from'/'to')\n"
+                            f"3. Do NOT add parameters that are NOT in this list (e.g., do NOT add 'city' if it's not listed)\n"
+                            f"4. If a parameter is not in the list above, DO NOT include it in your tool call\n"
+                            f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n\n"
+                        )
                     else:
                         tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms. Do NOT add parameters that are not listed.**\n\n"
             else:
@@ -625,35 +597,11 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 ollama_system_prompt += f"**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
                 ollama_system_prompt += f"**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location' or 'weather__find_location'.**\n\n"
                 
-                # Add tool sequence warnings
-                has_weather_forecast = any("weather__get_complete_forecast" in t.get('name', '') for t in tools)
-                has_weather_search = any("weather__search_location" in t.get('name', '') for t in tools)
-                if has_weather_forecast and has_weather_search:
-                    ollama_system_prompt += f"**🚨 CRITICAL TOOL SEQUENCE REQUIREMENT:**\n"
-                    ollama_system_prompt += f"1. When user asks for weather at a location name, you MUST call 'weather__search_location' FIRST\n"
-                    ollama_system_prompt += f"2. 'weather__search_location' accepts location names and returns coordinates\n"
-                    ollama_system_prompt += f"3. 'weather__get_complete_forecast' ONLY accepts coordinates (latitude/longitude) - it does NOT accept location names\n"
-                    ollama_system_prompt += f"4. Use the coordinates from 'weather__search_location' result to call 'weather__get_complete_forecast'\n"
-                    ollama_system_prompt += f"5. Do NOT invent, hallucinate, or guess coordinates\n"
-                    ollama_system_prompt += f"6. Do NOT add 'location' parameter to 'weather__get_complete_forecast' - it will be rejected\n"
-                    ollama_system_prompt += f"**If you have a location name but no coordinates, call 'weather__search_location' first!**\n\n"
+                # Note: Weather tool sequence enforcement is handled by main.py via tool filtering and state machine
+                # We don't add weather-specific warnings here to avoid conflicts with the enforcement logic
                 
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\n"
-                
-                # Add explicit parameter restrictions for weather__get_complete_forecast
-                weather_forecast_tool = next((t for t in tools if "weather__get_complete_forecast" in t.get('name', '')), None)
-                if weather_forecast_tool:
-                    input_schema = weather_forecast_tool.get('inputSchema', {})
-                    properties = input_schema.get('properties', {})
-                    allowed_params = list(properties.keys())
-                    if allowed_params:
-                        param_list = ", ".join([f"'{p}'" for p in allowed_params])
-                        ollama_system_prompt += f"**🚨 CRITICAL FOR 'weather__get_complete_forecast':**\n"
-                        ollama_system_prompt += f"- This tool ONLY accepts: {param_list}\n"
-                        ollama_system_prompt += f"- This tool does NOT accept 'location', 'city', 'address', 'place', or any location name\n"
-                        ollama_system_prompt += f"- If you have a location name, call 'weather__search_location' FIRST\n"
-                        ollama_system_prompt += f"- Do NOT add 'location' parameter - it will be rejected\n\n"
                 
                 ollama_system_prompt += f"You MUST use these tools to answer queries. Use the EXACT tool names listed above. Do not say you cannot access them. Just output the JSON to call them."
             else:
