@@ -85,22 +85,12 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     api_key = None
     if provider == "openai":
         api_key = connection_manager.openai_api_key
-    
-    # Extract user query from messages for date detection
-    user_query = ""
-    if messages:
-        for msg in reversed(messages):  # Check from most recent
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                user_query = msg.get("content", "")
-                break
-    
     response_text = await query_llm(
         messages, 
         api_key=api_key, 
         provider=provider, 
         model_url=connection_manager.ollama_url,
-        model_name=getattr(connection_manager, "ollama_model_name", "gemma3:1B"),
-        user_query=user_query
+        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b")
     )
     
     # Construct result
@@ -139,7 +129,7 @@ async def get_config():
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url,
-        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "gemma3:1B"),
+        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
         "agentMode": getattr(connection_manager, "agent_mode", "defender")
     }
     for server_key, conn in connection_manager.connections.items():
@@ -228,7 +218,7 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
         return {"error": "Ollama URL is not configured"}
     
     # Use provided model name or fall back to configured model
-    model = model_name or getattr(connection_manager, "ollama_model_name", "gemma3:1B")
+    model = model_name or getattr(connection_manager, "ollama_model_name", "qwen3:8b")
     
     # Ensure URL doesn't have /api/chat suffix
     base_url = url
@@ -478,8 +468,10 @@ async def chat(request: ChatRequest, req: Request):
                 server_tools = await connection_manager.list_tools(server)
                 tools.extend(server_tools)
                 print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
+            except TimeoutError as te:
+                print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for {server}: {te}", flush=True)
             except Exception as e:
-                print(f"Error loading tools for {server}: {e}")
+                print(f"[{get_timestamp()}] [ERROR] Error loading tools for {server}: {e}", flush=True)
     elif target_server:
         # Defender mode: explicitly block local shell tool execution.
         if agent_mode == "defender" and target_server == "shell":
@@ -505,12 +497,20 @@ async def chat(request: ChatRequest, req: Request):
             try:
                 import asyncio
                 for attempt in range(10):  # ~3s max
-                    tools = await connection_manager.list_tools(target_server)
-                    if tools:
-                        break
+                    try:
+                        tools = await connection_manager.list_tools(target_server)
+                        if tools:
+                            break
+                    except TimeoutError as te:
+                        print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for {target_server}: {te}", flush=True)
+                        tools = []
+                        break  # Don't retry on timeout, server is unresponsive
+                    except Exception as e:
+                        print(f"[{get_timestamp()}] [ERROR] Error loading tools for {target_server} (attempt {attempt + 1}/10): {e}", flush=True)
+                        tools = []
                     await asyncio.sleep(0.3)
             except Exception as e:
-                print(f"Error loading tools for {target_server}: {e}")
+                print(f"[{get_timestamp()}] [ERROR] Fatal error loading tools for {target_server}: {e}", flush=True)
                 tools = []
 
             print(f"DEBUG: Tools loaded for '{target_server}': {len(tools)}")
@@ -531,8 +531,11 @@ async def chat(request: ChatRequest, req: Request):
             # Naive: load all tools across all servers (intentionally permissive for lab demos)
             try:
                 tools = await connection_manager.list_tools()
+            except TimeoutError as te:
+                print(f"[{get_timestamp()}] [ERROR] Timeout loading all tools: {te}", flush=True)
+                tools = []
             except Exception as e:
-                print(f"Error loading all tools: {e}")
+                print(f"[{get_timestamp()}] [ERROR] Error loading all tools: {e}", flush=True)
                 tools = []
         else:
             # Defender: least privilege—no tools unless the user explicitly routes to a server.
@@ -652,7 +655,7 @@ async def chat(request: ChatRequest, req: Request):
         use_qwen_rag = (connection_manager.llm_provider == "ollama")
         
         # Get the model name (ensure it's loaded from config)
-        model_name = getattr(connection_manager, "ollama_model_name", "gemma3:1B")
+        model_name = getattr(connection_manager, "ollama_model_name", "qwen3:8b")
         print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: {model_name}")
         
         # In naive mode, allow prompt injection by not filtering user input
@@ -680,8 +683,7 @@ async def chat(request: ChatRequest, req: Request):
             model_url=connection_manager.ollama_url,
             model_name=model_name,
             use_qwen_rag=use_qwen_rag,
-            agent_mode=agent_mode,
-            user_query=user_message
+            agent_mode=agent_mode
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
         
@@ -765,7 +767,14 @@ async def chat(request: ChatRequest, req: Request):
                 
                 # Fallback: Try to find server if not namespaced (shouldn't happen with new client logic but good for safety)
                 if not server_to_call:
-                    all_tools = await connection_manager.list_tools()
+                    try:
+                        all_tools = await connection_manager.list_tools()
+                    except TimeoutError as te:
+                        print(f"[{get_timestamp()}] [ERROR] Timeout loading tools for fallback search: {te}", flush=True)
+                        all_tools = []
+                    except Exception as e:
+                        print(f"[{get_timestamp()}] [ERROR] Error loading tools for fallback search: {e}", flush=True)
+                        all_tools = []
                     # This is tricky because now all tools in list are namespaced.
                     # So if the LLM hallucinated a non-namespaced tool, we might fail.
                     # But let's try to match against the suffix.

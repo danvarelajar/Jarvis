@@ -212,7 +212,21 @@ class PersistentConnection:
         try:
             list_start = time.time()
             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools()")
-            result = await self.session.list_tools()
+            
+            # Add timeout to prevent indefinite hanging (30 seconds should be enough for list_tools)
+            list_tools_timeout = 30.0  # 30 seconds
+            try:
+                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Waiting for list_tools response (timeout: {list_tools_timeout}s)...", flush=True)
+                result = await asyncio.wait_for(
+                    self.session.list_tools(),
+                    timeout=list_tools_timeout
+                )
+            except asyncio.TimeoutError:
+                elapsed = time.time() - list_start
+                error_msg = f"list_tools() timed out after {elapsed:.1f}s (timeout: {list_tools_timeout}s). The MCP server '{self.display_name}' did not respond in time."
+                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error: list_tools() -> TimeoutError: {error_msg} ({format_duration(list_start)})", flush=True)
+                raise TimeoutError(error_msg)
+            
             self.tools_cache = []
             for t in result.tools:
                 tool_dump = t.model_dump()
@@ -222,12 +236,15 @@ class PersistentConnection:
                 self.tools_cache.append(tool_dump)
                 
             self.tools_cache_timestamp = current_time
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Response: list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})", flush=True)
             return self.tools_cache
+        except TimeoutError:
+            # Re-raise timeout errors so caller can handle them
+            raise
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing tools: {e}")
+            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Error listing tools: {e}", flush=True)
             return []
 
     async def get_resources(self):
@@ -292,7 +309,7 @@ class GlobalConnectionManager:
         self.openai_api_key: Optional[str] = None
         self.llm_provider: str = "openai" # openai or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
-        self.ollama_model_name: str = "gemma3:1B"  # Model name for Ollama (e.g., gemma3:1B, qwen3:8b)
+        self.ollama_model_name: str = "qwen3:8b"  # Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         # Lab alignment: controls how aggressively the agent exposes tools and follows untrusted text.
         # - defender: least-privilege tool exposure + safer tool-output framing
         # - naive: intentionally permissive to demonstrate failures
@@ -403,7 +420,7 @@ class GlobalConnectionManager:
                     llm_config = json.load(f)
                     self.llm_provider = llm_config.get("llmProvider", "openai")
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
-                    self.ollama_model_name = llm_config.get("ollamaModelName", "gemma3:1B")
+                    self.ollama_model_name = llm_config.get("ollamaModelName", "qwen3:8b")
                     self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
                 print(f"[{get_timestamp()}] [DEBUG] Loaded ollama_model_name: {self.ollama_model_name}")

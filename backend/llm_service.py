@@ -573,9 +573,9 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             )
             
             ollama_system_prompt = SYSTEM_PROMPT + date_context
-            if tools:
-                tool_descriptions = json.dumps(tools, indent=2)
-                ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+        if tools:
+            tool_descriptions = json.dumps(tools, indent=2)
+            ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
             else:
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
