@@ -1064,6 +1064,9 @@ async def chat(request: ChatRequest, req: Request):
                     weather_flow_state = None
                     weather_coordinates = None
                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 2 completed: Weather flow finished", flush=True)
+                    
+                    # Customize weather response to be more detailed
+                    # The tool result message will be customized below
                 
                 # Feed result back to LLM
                 print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
@@ -1149,6 +1152,40 @@ async def chat(request: ChatRequest, req: Request):
                                     "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
                                 )
                         current_messages.append({"role": "user", "content": tool_result_msg})
+                elif canonical_tool_name == "weather__get_complete_forecast":
+                    # Weather forecast tool completed - provide detailed response instructions
+                    if agent_mode == "defender":
+                        tool_result_msg = (
+                            "UNTRUSTED_TOOL_RESULT_BEGIN\n"
+                            f"tool={canonical_tool_name}\n"
+                            f"{tool_output}\n"
+                            "UNTRUSTED_TOOL_RESULT_END\n\n"
+                            "CRITICAL: You have received the complete weather forecast data above. You now have all the information needed to answer the user's question. "
+                            "DO NOT call any more tools. Return a DETAILED TEXT response (not JSON, no code blocks) with comprehensive weather information. "
+                            "Include ALL available details from the weather data such as:\n"
+                            "- Current temperature and conditions\n"
+                            "- Humidity, wind speed and direction\n"
+                            "- Visibility and pressure if available\n"
+                            "- Forecast for today and upcoming days if provided\n"
+                            "- Any weather alerts or warnings\n"
+                            "- Use markdown formatting (headers, lists, bold text) for better readability\n"
+                            "Format your response clearly with sections. Be thorough and include all relevant weather details from the data."
+                        )
+                    else:
+                        tool_result_msg = (
+                            f"Tool Result: {tool_output}\n\n"
+                            "CRITICAL: You have received the complete weather forecast data above. You now have all the information needed to answer the user's question. "
+                            "DO NOT call any more tools. Return a DETAILED TEXT response (not JSON, no code blocks) with comprehensive weather information. "
+                            "Include ALL available details from the weather data such as:\n"
+                            "- Current temperature and conditions\n"
+                            "- Humidity, wind speed and direction\n"
+                            "- Visibility and pressure if available\n"
+                            "- Forecast for today and upcoming days if provided\n"
+                            "- Any weather alerts or warnings\n"
+                            "- Use markdown formatting (headers, lists, bold text) for better readability\n"
+                            "Format your response clearly with sections. Be thorough and include all relevant weather details from the data."
+                        )
+                    current_messages.append({"role": "user", "content": tool_result_msg})
                 elif agent_mode == "defender":
                     tool_result_msg = (
                             "UNTRUSTED_TOOL_RESULT_BEGIN\n"
