@@ -1038,8 +1038,13 @@ async def chat(request: ChatRequest, req: Request):
                         # Try to parse coordinates from tool output
                         import json
                         result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                        
+                        # Handle array results (take first element)
+                        if isinstance(result_data, list) and len(result_data) > 0:
+                            result_data = result_data[0]
+                        
                         if isinstance(result_data, dict):
-                            # Look for latitude/longitude in the result
+                            # Look for latitude/longitude in the result (try multiple field names)
                             lat = result_data.get("latitude") or result_data.get("lat")
                             lon = result_data.get("longitude") or result_data.get("lon") or result_data.get("lng")
                             if lat is not None and lon is not None:
@@ -1047,9 +1052,13 @@ async def chat(request: ChatRequest, req: Request):
                                 weather_flow_state = "need_forecast"
                                 print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 1 completed: Extracted coordinates {weather_coordinates}, transitioning to Step 2", flush=True)
                             else:
-                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Warning: Could not extract coordinates from search_location result", flush=True)
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Warning: Could not extract coordinates from search_location result. Keys: {list(result_data.keys())}", flush=True)
+                        else:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Warning: Result is not a dict or array. Type: {type(result_data)}", flush=True)
                     except Exception as e:
                         print(f"[{get_timestamp()}] [WEATHER_FLOW] Error extracting coordinates: {e}", flush=True)
+                        import traceback
+                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Traceback: {traceback.format_exc()}", flush=True)
                 elif weather_flow_state == "need_forecast" and canonical_tool_name == "weather__get_complete_forecast":
                     # Step 2 completed: Weather flow is done
                     weather_flow_state = None
@@ -1064,26 +1073,82 @@ async def chat(request: ChatRequest, req: Request):
                 current_messages.append({"role": "assistant", "content": response_content})
                 
                 # Weather flow: Customize message based on step
-                if weather_flow_state == "need_forecast" and canonical_tool_name == "weather__search_location":
-                    # Step 1 completed: Instruct LLM to call get_complete_forecast with coordinates
-                    if weather_coordinates:
-                        lat = weather_coordinates['latitude']
-                        lon = weather_coordinates['longitude']
-                        tool_result_msg = (
-                            f"Tool Result: {tool_output}\n\n"
-                            f"CRITICAL: You have received coordinates from weather__search_location. "
-                            f"You MUST now call 'weather__get_complete_forecast' with these exact coordinates: "
-                            f"latitude={lat}, longitude={lon}. "
-                            f"Output ONLY the JSON tool call: {{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}"
-                        )
-                    else:
-                        # Fallback if coordinates extraction failed
-                        tool_result_msg = (
-                            f"Tool Result: {tool_output}\n\n"
-                            "CRITICAL: You have received location search results. Extract the latitude and longitude coordinates from the result above, "
-                            "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
-                        )
-                    current_messages.append({"role": "user", "content": tool_result_msg})
+                # Check if we just completed step 1 (search_location) and now need step 2 (forecast)
+                # The state should have been updated to "need_forecast" above if coordinates were extracted
+                if canonical_tool_name == "weather__search_location":
+                    # If state is still "need_search", try to extract coordinates again (fallback)
+                    if weather_flow_state == "need_search":
+                        print(f"[{get_timestamp()}] [WEATHER_FLOW] State still 'need_search' after search_location - attempting coordinate extraction", flush=True)
+                        try:
+                            import json
+                            result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                            if isinstance(result_data, list) and len(result_data) > 0:
+                                result_data = result_data[0]
+                            if isinstance(result_data, dict):
+                                lat = result_data.get("latitude") or result_data.get("lat")
+                                lon = result_data.get("longitude") or result_data.get("lon") or result_data.get("lng")
+                                if lat is not None and lon is not None:
+                                    weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
+                                    weather_flow_state = "need_forecast"
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Fallback extraction successful: {weather_coordinates}, state updated to 'need_forecast'", flush=True)
+                        except Exception as e:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Fallback extraction failed: {e}", flush=True)
+                    
+                    # Now check if we're in step 2 state and need to send instruction
+                    if weather_flow_state == "need_forecast":
+                        # Step 1 completed: Instruct LLM to call get_complete_forecast with coordinates
+                        if weather_coordinates:
+                            lat = weather_coordinates['latitude']
+                            lon = weather_coordinates['longitude']
+                            tool_result_msg = (
+                                f"Tool Result: {tool_output}\n\n"
+                                f"CRITICAL: You have received coordinates from weather__search_location. "
+                                f"You MUST now call 'weather__get_complete_forecast' with these exact coordinates: "
+                                f"latitude={lat}, longitude={lon}. "
+                                f"Output ONLY the JSON tool call: {{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}"
+                            )
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Sending step 2 instruction with coordinates: lat={lat}, lon={lon}", flush=True)
+                        else:
+                            # Fallback if coordinates extraction failed - try to extract from result again
+                            try:
+                                import json
+                                result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                                if isinstance(result_data, list) and len(result_data) > 0:
+                                    result_data = result_data[0]
+                                if isinstance(result_data, dict):
+                                    lat = result_data.get("latitude") or result_data.get("lat")
+                                    lon = result_data.get("longitude") or result_data.get("lon") or result_data.get("lng")
+                                    if lat is not None and lon is not None:
+                                        weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
+                                        lat = weather_coordinates['latitude']
+                                        lon = weather_coordinates['longitude']
+                                        tool_result_msg = (
+                                            f"Tool Result: {tool_output}\n\n"
+                                            f"CRITICAL: You have received coordinates from weather__search_location. "
+                                            f"You MUST now call 'weather__get_complete_forecast' with these exact coordinates: "
+                                            f"latitude={lat}, longitude={lon}. "
+                                            f"Output ONLY the JSON tool call: {{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}"
+                                        )
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Extracted coordinates from fallback: lat={lat}, lon={lon}", flush=True)
+                                    else:
+                                        tool_result_msg = (
+                                            f"Tool Result: {tool_output}\n\n"
+                                            "CRITICAL: You have received location search results. Extract the latitude and longitude coordinates from the result above, "
+                                            "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
+                                        )
+                                else:
+                                    tool_result_msg = (
+                                        f"Tool Result: {tool_output}\n\n"
+                                        "CRITICAL: You have received location search results. Extract the latitude and longitude coordinates from the result above, "
+                                        "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
+                                    )
+                            except Exception as e:
+                                tool_result_msg = (
+                                    f"Tool Result: {tool_output}\n\n"
+                                    "CRITICAL: You have received location search results. Extract the latitude and longitude coordinates from the result above, "
+                                    "then call 'weather__get_complete_forecast' with those coordinates. Output ONLY the JSON tool call."
+                                )
+                        current_messages.append({"role": "user", "content": tool_result_msg})
                 elif agent_mode == "defender":
                     tool_result_msg = (
                             "UNTRUSTED_TOOL_RESULT_BEGIN\n"
