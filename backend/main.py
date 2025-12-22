@@ -708,9 +708,27 @@ async def chat(request: ChatRequest, req: Request):
                     (t for t in tools if t.get("name", "").lower().endswith(f"__{requested_tool_name.lower()}")),
                     None
                 )
-                if suffix_match:
-                    tool_def = suffix_match
-                    canonical_tool_name = suffix_match.get("name") or canonical_tool_name
+            if suffix_match:
+                tool_def = suffix_match
+                canonical_tool_name = suffix_match.get("name") or canonical_tool_name
+
+            # VALIDATION: Reject hallucinated tool names before execution
+            if not tool_def and tools:
+                # Tool name doesn't exist - this is a hallucination
+                available_names = [t.get("name", "unknown") for t in tools]
+                available_list = ", ".join([f"'{name}'" for name in available_names])
+                error_msg = (
+                    f"ERROR: Tool '{requested_tool_name}' does not exist. "
+                    f"Available tools are: {available_list}. "
+                    f"You MUST use one of these EXACT tool names. "
+                    f"Do NOT invent or hallucinate tool names. "
+                    f"Please call one of the available tools listed above."
+                )
+                print(f"[{get_timestamp()}] [VALIDATION] Rejected hallucinated tool name: '{requested_tool_name}'", flush=True)
+                print(f"[{get_timestamp()}] [VALIDATION] Available tools: {available_list}", flush=True)
+                current_messages.append({"role": "assistant", "content": response_content})
+                current_messages.append({"role": "user", "content": error_msg})
+                continue  # Retry with correct tool name
 
             # Prevent infinite loops: Check if we already called this tool with these args
             # We need to serialize args to check for equality

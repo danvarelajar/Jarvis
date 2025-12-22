@@ -453,6 +453,14 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # Build context with retrieved tool documentation
             tool_context = "## MCP TOOL DOCUMENTATION:\n\n"
             if relevant_tools:
+                # CRITICAL: List exact tool names first to prevent hallucination
+                exact_tool_names = [tool.get('name', 'unknown') for tool in relevant_tools]
+                tool_context += f"**CRITICAL: AVAILABLE TOOL NAMES (use EXACTLY as shown):**\n"
+                for name in exact_tool_names:
+                    tool_context += f"  - `{name}`\n"
+                tool_context += f"\n**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
+                tool_context += f"**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location' or 'weather__find_location'.**\n\n"
+                
                 for tool in relevant_tools:
                     tool_name = tool.get('name', 'unknown')
                     tool_context += f"### Tool: {tool_name}\n"
@@ -574,8 +582,14 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             
             ollama_system_prompt = SYSTEM_PROMPT + date_context
             if tools:
+                # List exact tool names first to prevent hallucination
+                exact_tool_names = [tool.get('name', 'unknown') for tool in tools]
+                tool_names_list = "\n".join([f"  - `{name}`" for name in exact_tool_names])
+                ollama_system_prompt += f"\n\n## AVAILABLE TOOLS:\n\n**CRITICAL: EXACT TOOL NAMES (use EXACTLY as shown):**\n{tool_names_list}\n\n"
+                ollama_system_prompt += f"**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
+                ollama_system_prompt += f"**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location' or 'weather__find_location'.**\n\n"
                 tool_descriptions = json.dumps(tools, indent=2)
-                ollama_system_prompt += f"\n\n## AVAILABLE TOOLS (JSON Format):\n{tool_descriptions}\n\nYou MUST use these tools to answer queries. Do not say you cannot access them. Just output the JSON to call them."
+                ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\nYou MUST use these tools to answer queries. Use the EXACT tool names listed above. Do not say you cannot access them. Just output the JSON to call them."
             else:
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
