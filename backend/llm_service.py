@@ -474,12 +474,18 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     
                     # Add tool sequence/dependency information if it's a weather tool
                     if tool_name == "weather__get_complete_forecast":
-                        tool_context += f"\n**⚠️  IMPORTANT: This tool requires coordinates (latitude/longitude). "
-                        tool_context += f"You MUST call 'weather__search_location' FIRST to get coordinates, "
-                        tool_context += f"then use those coordinates to call this tool. Do NOT invent or hallucinate coordinates.**\n"
+                        tool_context += f"\n**🚨 CRITICAL TOOL SEQUENCE REQUIREMENT:**\n"
+                        tool_context += f"1. This tool REQUIRES coordinates (latitude/longitude) - it does NOT accept location names\n"
+                        tool_context += f"2. You MUST call 'weather__search_location' FIRST with the location name to get coordinates\n"
+                        tool_context += f"3. Then use the coordinates from that result to call this tool\n"
+                        tool_context += f"4. Do NOT invent, hallucinate, or guess coordinates\n"
+                        tool_context += f"5. Do NOT add 'location' parameter to this tool - it only accepts latitude and longitude\n"
+                        tool_context += f"**If you have a location name but no coordinates, call 'weather__search_location' first!**\n"
                     elif tool_name == "weather__search_location":
-                        tool_context += f"\n**⚠️  IMPORTANT: Call this tool FIRST to get coordinates for a location, "
-                        tool_context += f"then use those coordinates with 'weather__get_complete_forecast'.**\n"
+                        tool_context += f"\n**🚨 CRITICAL: This is the FIRST tool you must call when the user asks for weather at a location name.**\n"
+                        tool_context += f"1. Call this tool FIRST with the location name\n"
+                        tool_context += f"2. Use the coordinates from the result to call 'weather__get_complete_forecast'\n"
+                        tool_context += f"3. Do NOT skip this step - you cannot get weather without coordinates\n"
                     
                     tool_context += "\n"
                     
@@ -610,10 +616,14 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 has_weather_forecast = any("weather__get_complete_forecast" in t.get('name', '') for t in tools)
                 has_weather_search = any("weather__search_location" in t.get('name', '') for t in tools)
                 if has_weather_forecast and has_weather_search:
-                    ollama_system_prompt += f"**⚠️  TOOL SEQUENCE REQUIREMENT:**\n"
-                    ollama_system_prompt += f"- You MUST call 'weather__search_location' FIRST to get coordinates for a location\n"
-                    ollama_system_prompt += f"- Then use those coordinates to call 'weather__get_complete_forecast'\n"
-                    ollama_system_prompt += f"- Do NOT invent or hallucinate coordinates. Always get them from 'weather__search_location' first.\n\n"
+                    ollama_system_prompt += f"**🚨 CRITICAL TOOL SEQUENCE REQUIREMENT:**\n"
+                    ollama_system_prompt += f"1. When user asks for weather at a location name, you MUST call 'weather__search_location' FIRST\n"
+                    ollama_system_prompt += f"2. 'weather__search_location' accepts location names and returns coordinates\n"
+                    ollama_system_prompt += f"3. 'weather__get_complete_forecast' ONLY accepts coordinates (latitude/longitude) - it does NOT accept location names\n"
+                    ollama_system_prompt += f"4. Use the coordinates from 'weather__search_location' result to call 'weather__get_complete_forecast'\n"
+                    ollama_system_prompt += f"5. Do NOT invent, hallucinate, or guess coordinates\n"
+                    ollama_system_prompt += f"6. Do NOT add 'location' parameter to 'weather__get_complete_forecast' - it will be rejected\n"
+                    ollama_system_prompt += f"**If you have a location name but no coordinates, call 'weather__search_location' first!**\n\n"
                 
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\nYou MUST use these tools to answer queries. Use the EXACT tool names listed above. Do not say you cannot access them. Just output the JSON to call them."

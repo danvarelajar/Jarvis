@@ -835,8 +835,21 @@ async def chat(request: ChatRequest, req: Request):
                     # Check for missing required args
                     missing_args = [arg for arg in required_args if arg not in tool_call.arguments or tool_call.arguments[arg] in (None, "")]
                     if missing_args:
-                        error_msg = f"Error: Missing required arguments for tool '{canonical_tool_name}': {', '.join(missing_args)}. Please ask the user for these values."
-                        print(f"Validation failed: {error_msg}. Retrying with LLM...")
+                        # Special handling for weather tools: if get_complete_forecast is missing coordinates, redirect to search_location
+                        if canonical_tool_name == "weather__get_complete_forecast" and any(arg in missing_args for arg in ["latitude", "longitude"]):
+                            # Check if we have a location name in the user's original query
+                            location_hint = ""
+                            if "location" in tool_call.arguments:
+                                location_hint = f" You have a location name '{tool_call.arguments.get('location')}' - "
+                            error_msg = (
+                                f"ERROR: Tool 'weather__get_complete_forecast' requires coordinates (latitude, longitude) but they are missing. "
+                                f"{location_hint}You MUST call 'weather__search_location' FIRST with the location name to get coordinates, "
+                                f"then use those coordinates to call 'weather__get_complete_forecast'. "
+                                f"Do NOT invent or hallucinate coordinates. Call 'weather__search_location' now."
+                            )
+                        else:
+                            error_msg = f"Error: Missing required arguments for tool '{canonical_tool_name}': {', '.join(missing_args)}. Please ask the user for these values."
+                        print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
@@ -844,8 +857,18 @@ async def chat(request: ChatRequest, req: Request):
                     # Check for unknown args
                     unknown_args = [arg for arg in tool_call.arguments if arg not in allowed_args]
                     if unknown_args:
-                        error_msg = f"Error: Tool '{canonical_tool_name}' does not accept arguments: {', '.join(unknown_args)}. Allowed arguments: {', '.join(allowed_args)}. SUGGESTION: Call the tool WITHOUT these arguments to get the full list, then filter the results yourself."
-                        print(f"Validation failed: {error_msg}. Retrying with LLM...")
+                        # Special handling for weather tools: if trying to call get_complete_forecast with location, redirect to search_location
+                        if canonical_tool_name == "weather__get_complete_forecast" and "location" in unknown_args:
+                            error_msg = (
+                                f"ERROR: Tool 'weather__get_complete_forecast' does not accept 'location' parameter. "
+                                f"It only accepts: {', '.join(allowed_args)}. "
+                                f"You MUST call 'weather__search_location' FIRST with the location name to get coordinates, "
+                                f"then use those coordinates to call 'weather__get_complete_forecast'. "
+                                f"Do NOT invent or hallucinate coordinates. Call 'weather__search_location' now."
+                            )
+                        else:
+                            error_msg = f"Error: Tool '{canonical_tool_name}' does not accept arguments: {', '.join(unknown_args)}. Allowed arguments: {', '.join(allowed_args)}. SUGGESTION: Call the tool WITHOUT these arguments to get the full list, then filter the results yourself."
+                        print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
