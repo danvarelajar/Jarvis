@@ -493,7 +493,7 @@ function App() {
 
                     {messages.map((msg, idx) => (
                         <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[80%] rounded-lg p-4 ${msg.role === 'user'
+                            <div className={`max-w-[80%] min-w-0 rounded-lg p-4 overflow-hidden ${msg.role === 'user'
                                 ? 'bg-blue-600 text-white'
                                 : 'bg-gray-700 text-gray-100 border border-gray-600'
                                 }`}>
@@ -501,7 +501,33 @@ function App() {
                                     {msg.role === 'user' ? <User size={12} /> : <Bot size={12} />}
                                     <span className="uppercase font-bold">{msg.role}</span>
                                 </div>
-                                <div className="prose prose-invert max-w-none text-sm break-words">
+                                <div className="prose prose-invert prose-sm max-w-none text-sm break-words overflow-wrap-anywhere">
+                                    <style>{`
+                                        .prose {
+                                            max-width: 100% !important;
+                                        }
+                                        .prose * {
+                                            max-width: 100% !important;
+                                            word-wrap: break-word;
+                                            overflow-wrap: break-word;
+                                            word-break: break-word;
+                                        }
+                                        .prose ul, .prose ol {
+                                            max-width: 100%;
+                                            overflow-wrap: break-word;
+                                        }
+                                        .prose table {
+                                            display: block;
+                                            overflow-x: auto;
+                                            max-width: 100%;
+                                        }
+                                        .prose pre {
+                                            max-width: 100%;
+                                            overflow-x: auto;
+                                            word-wrap: break-word;
+                                            white-space: pre-wrap;
+                                        }
+                                    `}</style>
                                     <ReactMarkdown
                                         remarkPlugins={[remarkGfm]}
                                         components={{
@@ -514,12 +540,12 @@ function App() {
                                                         language={match[1]}
                                                         PreTag="div"
                                                         wrapLongLines={true}
-                                                        className="rounded-md !bg-gray-900 !p-3 !my-2 !whitespace-pre-wrap !break-words max-w-full overflow-x-auto"
+                                                        className="rounded-md !bg-gray-900 !p-3 !my-2 !whitespace-pre-wrap !break-words !max-w-full overflow-x-auto"
                                                     >
                                                         {String(children).replace(/\n$/, '')}
                                                     </SyntaxHighlighter>
                                                 ) : (
-                                                    <code {...props} className={`${className} bg-black/20 rounded px-1 py-0.5`}>
+                                                    <code {...props} className={`${className} bg-black/20 rounded px-1 py-0.5 break-words`}>
                                                         {children}
                                                     </code>
                                                 )
@@ -530,9 +556,9 @@ function App() {
                                     </ReactMarkdown>
                                 </div>
                                 {msg.tool_result && (
-                                    <div className="mt-2 p-2 bg-black/30 rounded text-xs font-mono text-green-300 border-l-2 border-green-500 overflow-x-auto">
+                                    <div className="mt-2 p-2 bg-black/30 rounded text-xs font-mono text-green-300 border-l-2 border-green-500 overflow-hidden">
                                         <div className="font-bold mb-1">Tool Result:</div>
-                                        <pre className="whitespace-pre-wrap break-words">{(() => {
+                                        <pre className="whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full">{(() => {
                                             try {
                                                 const parsed = JSON.parse(msg.tool_result);
                                                 return JSON.stringify(parsed, null, 2);
