@@ -502,37 +502,105 @@ def build_structured_prompt_gemma(
     prompt += "Example: If user says '07/01/2026' and above shows '2026-01-07', use '2026-01-07'.\n"
     prompt += "\n"
     
-    # FEW-SHOT EXAMPLES (with placeholders to prevent example leakage)
+    # FEW-SHOT EXAMPLES (using actual tool specs)
     prompt += "## EXAMPLES\n"
     if tools:
-        # Example 1: Tool call (CORRECT format)
-        example_tool = tools[0].get("name", "example_tool")
-        if use_function_call_tokens:
-            prompt += (
-                f"User: \"@booking find hotels in <CITY>\"\n"
-                f"Assistant: <start_function_call>{{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}<end_function_call>\n\n"
-            )
-        else:
-            prompt += (
-                f"User: \"@booking find hotels in <CITY>\"\n"
-                f"Assistant: {{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}\n\n"
-            )
-        # Example 2: WRONG format (what NOT to do)
+        # Find available tools by name
+        tool_names = [t.get("name", "") for t in tools]
+        has_search_flights = any("search_flights" in name for name in tool_names)
+        has_search_hotels = any("search_hotels" in name for name in tool_names)
+        has_create_itinerary = any("create_itinerary" in name for name in tool_names)
+        has_search_location = any("search_location" in name for name in tool_names)
+        has_get_forecast = any("get_complete_forecast" in name for name in tool_names)
+        
+        # Example 1: search_hotels (if available)
+        if has_search_hotels:
+            hotel_tool = next((t.get("name") for t in tools if "search_hotels" in t.get("name", "")), "booking__search_hotels")
+            if use_function_call_tokens:
+                prompt += (
+                    f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<CHECKIN_FROM_USER>\", \"checkOutDate\": \"<CHECKOUT_FROM_USER>\", \"rooms\": 1}}}}<end_function_call>\n\n"
+                )
+            else:
+                prompt += (
+                    f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
+                    f"Assistant: {{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<CHECKIN_FROM_USER>\", \"checkOutDate\": \"<CHECKOUT_FROM_USER>\", \"rooms\": 1}}}}\n\n"
+                )
+        
+        # Example 2: search_flights (if available)
+        if has_search_flights:
+            flight_tool = next((t.get("name") for t in tools if "search_flights" in t.get("name", "")), "booking__search_flights")
+            if use_function_call_tokens:
+                prompt += (
+                    f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}}}<end_function_call>\n\n"
+                )
+            else:
+                prompt += (
+                    f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
+                    f"Assistant: {{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}}}\n\n"
+                )
+        
+        # Example 3: create_itinerary (if available)
+        if has_create_itinerary:
+            itinerary_tool = next((t.get("name") for t in tools if "create_itinerary" in t.get("name", "")), "booking__create_itinerary")
+            if use_function_call_tokens:
+                prompt += (
+                    f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}<end_function_call>\n\n"
+                )
+            else:
+                prompt += (
+                    f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
+                    f"Assistant: {{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}\n\n"
+                )
+        
+        # Example 4: search_location (weather) (if available)
+        if has_search_location:
+            location_tool = next((t.get("name") for t in tools if "search_location" in t.get("name", "")), "weather__search_location")
+            if use_function_call_tokens:
+                prompt += (
+                    f"User: \"@weather what's the weather in <CITY>\"\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{location_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}<end_function_call>\n\n"
+                )
+            else:
+                prompt += (
+                    f"User: \"@weather what's the weather in <CITY>\"\n"
+                    f"Assistant: {{\"tool\": \"{location_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}\n\n"
+                )
+        
+        # Example 5: get_complete_forecast (weather) (if available)
+        if has_get_forecast:
+            forecast_tool = next((t.get("name") for t in tools if "get_complete_forecast" in t.get("name", "")), "weather__get_complete_forecast")
+            if use_function_call_tokens:
+                prompt += (
+                    f"User: \"@weather get forecast for coordinates 40.4168, -3.7038\"\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{forecast_tool}\", \"arguments\": {{\"latitude\": 40.4168, \"longitude\": -3.7038}}}}<end_function_call>\n\n"
+                )
+            else:
+                prompt += (
+                    f"User: \"@weather get forecast for coordinates 40.4168, -3.7038\"\n"
+                    f"Assistant: {{\"tool\": \"{forecast_tool}\", \"arguments\": {{\"latitude\": 40.4168, \"longitude\": -3.7038}}}}\n\n"
+                )
+        
+        # Example 6: WRONG format (what NOT to do)
         prompt += (
             "WRONG (do NOT do this):\n"
             "User: \"@booking create itinerary\"\n"
-            "Assistant: {\"origin\": \"MAD\", \"destination\": \"KUL\", \"dates\": {...}}\n"
+            "Assistant: {\"ORIGIN\": \"MAD\", \"DESTINATION\": \"KUL\", \"DATES\": {...}}\n"
             "This is WRONG because it's missing 'tool' and 'arguments' fields.\n\n"
         )
-        # Example 3: Text response
+        
+        # Example 7: Text response (no tools needed)
         prompt += (
             "User: \"Hi there\"\n"
             "Assistant: Hello! How can I help you today?\n\n"
         )
-        # Example 4: Missing parameters
+        
+        # Example 8: Missing parameters
         prompt += (
             "If required parameters are missing, ask user directly:\n"
-            "\"I need: city, checkInDate, checkOutDate. Please provide them.\"\n"
+            "\"I need: city, checkInDate, checkOutDate, rooms. Please provide them.\"\n"
             "Do NOT call the tool until all required parameters are provided.\n\n"
         )
     else:
