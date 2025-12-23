@@ -1376,6 +1376,10 @@ async def chat(request: ChatRequest, req: Request):
                             "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
+                    # Remove tools after weather forecast - LLM must return text
+                    tools = []
+                    tools_to_send = []
+                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Tools removed after forecast - LLM must return text response only", flush=True)
                 elif agent_mode == "defender":
                     tool_result_msg = (
                             "UNTRUSTED_TOOL_RESULT_BEGIN\n"
@@ -1399,6 +1403,12 @@ async def chat(request: ChatRequest, req: Request):
                         "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only."
                     )
                     current_messages.append({"role": "user", "content": tool_result_msg})
+                
+                # CRITICAL: Remove tools after successful tool execution
+                # This prevents the LLM from calling tools again - it must return text response
+                tools = []  # Clear tools so LLM can only return text
+                tools_to_send = []  # Also clear tools_to_send
+                print(f"[{get_timestamp()}] [TOOL_RESULT] Tools removed - LLM must return text response only", flush=True)
                 
                 # Loop continues to let LLM process the result
                 
