@@ -502,6 +502,22 @@ def build_structured_prompt_gemma(
     prompt += "Example: If user says '07/01/2026' and above shows '2026-01-07', use '2026-01-07'.\n"
     prompt += "\n"
     
+    # DATE FORMAT REQUIREMENT (for booking tools)
+    has_booking_tools = any("booking__" in (t.get("name") or "") for t in tools)
+    if has_booking_tools:
+        prompt += "## DATE FORMAT REQUIREMENT (CRITICAL FOR BOOKING TOOLS)\n"
+        prompt += (
+            "ALL date parameters (departDate, returnDate, checkInDate, checkOutDate) MUST be in YYYY-MM-DD format.\n"
+            "Examples:\n"
+            "- '2026-02-02' is CORRECT\n"
+            "- '02/02/2026' is WRONG (do NOT use DD/MM/YYYY)\n"
+            "- '02-02-2026' is WRONG (do NOT use DD-MM-YYYY)\n"
+            "- 'February 2, 2026' is WRONG (do NOT use text format)\n"
+            "CRITICAL: Convert ALL dates to YYYY-MM-DD format before calling booking tools.\n"
+            "Use the DATE CONTEXT section above to find the correct YYYY-MM-DD format for dates mentioned by the user.\n"
+        )
+        prompt += "\n"
+    
     # FEW-SHOT EXAMPLES (using actual tool specs)
     prompt += "## EXAMPLES\n"
     if tools:
@@ -519,12 +535,14 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<CHECKIN_FROM_USER>\", \"checkOutDate\": \"<CHECKOUT_FROM_USER>\", \"rooms\": 1}}}}<end_function_call>\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"2026-02-02\", \"checkOutDate\": \"2026-02-06\", \"rooms\": 1}}}}<end_function_call>\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
-                    f"Assistant: {{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<CHECKIN_FROM_USER>\", \"checkOutDate\": \"<CHECKOUT_FROM_USER>\", \"rooms\": 1}}}}\n\n"
+                    f"Assistant: {{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"2026-02-02\", \"checkOutDate\": \"2026-02-06\", \"rooms\": 1}}}}\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 2: search_flights (if available)
@@ -533,12 +551,14 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}}}<end_function_call>\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"passengers\": <PASSENGERS_FROM_USER>}}}}<end_function_call>\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
-                    f"Assistant: {{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}}}\n\n"
+                    f"Assistant: {{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"passengers\": <PASSENGERS_FROM_USER>}}}}\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 3: create_itinerary (if available)
@@ -547,12 +567,14 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}<end_function_call>\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}<end_function_call>\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
-                    f"Assistant: {{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"<DEPART_FROM_USER>\", \"returnDate\": \"<RETURN_FROM_USER>\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}\n\n"
+                    f"Assistant: {{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}\n"
+                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 4: search_location (weather) (if available)
