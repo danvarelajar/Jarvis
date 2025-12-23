@@ -775,17 +775,17 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     else:
         # Legacy /api/chat format
         ollama_messages = [{"role": "system", "content": system_prompt}]
-    
-    for msg in messages:
-        # Map roles if necessary, but "user" and "assistant" are standard
-        role = msg["role"]
-        if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
-        ollama_messages.append({"role": role, "content": msg["content"]})
         
-    payload = {
+        for msg in messages:
+            # Map roles if necessary, but "user" and "assistant" are standard
+            role = msg["role"]
+            if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
+            ollama_messages.append({"role": role, "content": msg["content"]})
+        
+        payload = {
             "model": model_name,
-        "messages": ollama_messages,
-        "stream": False,
+            "messages": ollama_messages,
+            "stream": False,
             "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
         "options": {
             "temperature": 0 # Low temp for tool execution
