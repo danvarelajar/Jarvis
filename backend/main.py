@@ -727,9 +727,10 @@ async def chat(request: ChatRequest, req: Request):
         messages_to_send = current_messages.copy()
         if loop_detected and not tools:
             # Add a system-level instruction at the end to override any previous JSON instructions
+            # Make it concise and clear - don't repeat what's already in the user message
             messages_to_send.append({
                 "role": "system", 
-                "content": "CRITICAL INSTRUCTION: You are in TEXT-ONLY mode. NO TOOLS are available. DO NOT output JSON. DO NOT output {}. DO NOT try to call tools. Return ONLY plain text. If you see any JSON in your response, you are making an error. Write a natural language response summarizing the information you have."
+                "content": "TEXT-ONLY MODE: No tools available. Write plain text answer only. NO JSON. NO {}. NO tool calls."
             })
         
         response_content = await query_llm(
@@ -838,8 +839,45 @@ async def chat(request: ChatRequest, req: Request):
                 tool_call_history = set()
             
             if tool_signature in tool_call_history:
-                error_msg = f"CRITICAL: You have already called tool '{tool_call.tool}' with these exact arguments. This is a LOOP. You MUST STOP calling tools immediately. DO NOT output JSON. DO NOT output {{}}. Return ONLY plain text summarizing the information you already have from previous tool calls. Just write the answer in natural language, no JSON, no tool calls."
-                print(f"Loop detected: {error_msg}")
+                # Find the tool result message in the conversation history
+                tool_result_text = ""
+                for msg in reversed(current_messages):
+                    content = msg.get("content", "")
+                    if msg.get("role") == "user" and ("Tool Result:" in content or "UNTRUSTED_TOOL_RESULT_BEGIN" in content):
+                        # Extract tool result content
+                        if "Tool Result:" in content:
+                            # Extract everything after "Tool Result:" but before the 🚨 emoji or CRITICAL instruction
+                            parts = content.split("Tool Result:")[-1]
+                            if "🚨" in parts:
+                                tool_result_text = parts.split("🚨")[0].strip()
+                            elif "CRITICAL:" in parts:
+                                tool_result_text = parts.split("CRITICAL:")[0].strip()
+                            else:
+                                tool_result_text = parts.strip()
+                        elif "UNTRUSTED_TOOL_RESULT_BEGIN" in content:
+                            # Extract content between BEGIN and END markers
+                            begin_idx = content.find("UNTRUSTED_TOOL_RESULT_BEGIN")
+                            end_idx = content.find("UNTRUSTED_TOOL_RESULT_END")
+                            if begin_idx != -1 and end_idx != -1:
+                                tool_result_text = content[begin_idx:end_idx + len("UNTRUSTED_TOOL_RESULT_END")].strip()
+                        if tool_result_text:
+                            break
+                
+                error_msg = (
+                    f"🚨 LOOP DETECTED: You already called '{tool_call.tool}' with these exact arguments. "
+                    f"You MUST STOP calling tools immediately. "
+                )
+                if tool_result_text:
+                    error_msg += (
+                        f"The tool result you received earlier was: {tool_result_text[:500]}... "
+                        f"Use THIS information to write your answer. "
+                    )
+                error_msg += (
+                    "DO NOT output JSON. DO NOT output {}. DO NOT call tools. "
+                    "Return ONLY plain text summarizing the information you already have. "
+                    "Write a natural language answer directly. NO JSON. NO tool calls."
+                )
+                print(f"Loop detected: {error_msg[:200]}...", flush=True)
                 # Remove the last assistant message that contained the JSON tool call to break the pattern
                 if current_messages and current_messages[-1].get("role") == "assistant":
                     current_messages.pop()
@@ -1268,15 +1306,21 @@ async def chat(request: ChatRequest, req: Request):
                             f"tool={canonical_tool_name}\n"
                             f"{tool_output}\n"
                         "UNTRUSTED_TOOL_RESULT_END\n\n"
-                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Just write the answer directly. "
-                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
+                        "🚨 CRITICAL: You have received the tool result above. You MUST STOP calling tools now. "
+                        "DO NOT output JSON. DO NOT output {}. DO NOT call any more tools. "
+                        "You have ALL the information you need. Return ONLY plain text summarizing the results. "
+                        "Write a natural language answer directly. NO JSON. NO tool calls. "
+                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only."
                         )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 else:
                     tool_result_msg = (
                         f"Tool Result: {tool_output}\n\n"
-                        "CRITICAL: You have received the tool result above. You now have the information needed to answer the user's question. DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) summarizing the results in natural language. Just write the answer directly. "
-                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only. Do NOT respond in Arabic, Spanish, or any other language - ONLY English."
+                        "🚨 CRITICAL: You have received the tool result above. You MUST STOP calling tools now. "
+                        "DO NOT output JSON. DO NOT output {}. DO NOT call any more tools. "
+                        "You have ALL the information you need. Return ONLY plain text summarizing the results. "
+                        "Write a natural language answer directly. NO JSON. NO tool calls. "
+                        "CRITICAL LANGUAGE REQUIREMENT: You MUST respond in ENGLISH only."
                     )
                     current_messages.append({"role": "user", "content": tool_result_msg})
                 
