@@ -538,7 +538,41 @@ def build_structured_prompt_gemma(
     
     return prompt
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b", use_structured: bool = False) -> str:
+def convert_messages_to_prompt(messages: list, system_prompt: str) -> str:
+    """
+    Convert messages array to single prompt string with Gemma control tokens.
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        system_prompt: System prompt (already contains Gemma tokens if use_structured=True)
+    
+    Returns:
+        Single prompt string with all messages formatted with Gemma tokens
+    """
+    prompt_parts = []
+    
+    # System prompt (already has Gemma tokens if use_structured=True)
+    prompt_parts.append(system_prompt)
+    
+    # Convert messages to prompt format with Gemma tokens
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        
+        if role == "system":
+            # System prompt already handled above, skip duplicate
+            continue
+        elif role == "user":
+            prompt_parts.append(f"<start_of_turn>user\n{content}<end_of_turn>")
+        elif role == "assistant" or role == "model":
+            prompt_parts.append(f"<start_of_turn>model\n{content}<end_of_turn>")
+    
+    # Add final turn marker for LLM to respond
+    prompt_parts.append("<start_of_turn>model\n")
+    
+    return "\n".join(prompt_parts)
+
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b", use_structured: bool = False, use_generate: bool = True) -> str:
     """
     Queries a local Ollama instance.
     
@@ -548,59 +582,87 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         model_url: Ollama server URL
         model_name: Model name to use (e.g., qwen3:8b, gemma3:1B, etc.)
         use_structured: If True, system_prompt already contains Gemma control tokens
+        use_generate: If True, use /api/generate endpoint (single prompt string), else use /api/chat (messages array)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
-        
-    # Ensure URL ends with /api/chat
-    # If the user provides "http://10.3.0.7:11434", we append "/api/chat"
-    # If they include it, we respect it.
-    api_endpoint = model_url
-    if not api_endpoint.endswith("/api/chat"):
-        if api_endpoint.endswith("/"):
-            api_endpoint += "api/chat"
-        else:
-            api_endpoint += "/api/chat"
-            
-    # Prep messages
-    # If use_structured=True, system_prompt already contains Gemma control tokens
-    # Ollama's template will wrap it with <start_of_turn>developer based on role="system"
-    final_system_prompt = system_prompt
-
-    print(f"[{get_timestamp()}] DEBUG: Ollama System Prompt Length: {len(final_system_prompt)}")
+    
+    # Determine endpoint based on use_generate flag
+    if use_generate:
+        # Use /api/generate endpoint
+        api_endpoint = model_url
+        if not api_endpoint.endswith("/api/generate"):
+            if api_endpoint.endswith("/"):
+                api_endpoint += "api/generate"
+            else:
+                api_endpoint += "/api/generate"
+    else:
+        # Use /api/chat endpoint (legacy)
+        api_endpoint = model_url
+        if not api_endpoint.endswith("/api/chat"):
+            if api_endpoint.endswith("/"):
+                api_endpoint += "api/chat"
+            else:
+                api_endpoint += "/api/chat"
+    
     print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
     if use_structured:
         print(f"[{get_timestamp()}] DEBUG: Using structured prompt with Gemma control tokens")
+    if use_generate:
+        print(f"[{get_timestamp()}] DEBUG: Using /api/generate endpoint")
+    else:
+        print(f"[{get_timestamp()}] DEBUG: Using /api/chat endpoint (legacy)")
     
-    ollama_messages = [{"role": "system", "content": final_system_prompt}]
-    
-    for msg in messages:
-        # Map roles if necessary, but "user" and "assistant" are standard
-        role = msg["role"]
-        if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
-        ollama_messages.append({"role": role, "content": msg["content"]})
+    if use_generate:
+        # Convert messages to single prompt string
+        full_prompt = convert_messages_to_prompt(messages, system_prompt)
+        print(f"[{get_timestamp()}] DEBUG: Full prompt length: {len(full_prompt)} chars")
         
-    payload = {
-        "model": model_name,
-        "messages": ollama_messages,
-        "stream": False,
-        "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
-        "options": {
-            "temperature": 0 # Low temp for tool execution
+        payload = {
+            "model": model_name,
+            "prompt": full_prompt,
+            "stream": False,
+            "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use
+            "options": {
+                "temperature": 0  # Low temp for tool execution
+            }
         }
-    }
+    else:
+        # Legacy /api/chat format
+        ollama_messages = [{"role": "system", "content": system_prompt}]
+        
+        for msg in messages:
+            # Map roles if necessary, but "user" and "assistant" are standard
+            role = msg["role"]
+            if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
+            ollama_messages.append({"role": role, "content": msg["content"]})
+        
+        payload = {
+            "model": model_name,
+            "messages": ollama_messages,
+            "stream": False,
+            "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
+            "options": {
+                "temperature": 0 # Low temp for tool execution
+            }
+        }
     
     # Log payload size for debugging
     import json as json_module
     payload_size = len(json_module.dumps(payload))
-    total_chars = sum(len(str(msg.get("content", ""))) for msg in ollama_messages)
-    print(f"[{get_timestamp()}] [LLM] Payload size: {payload_size} bytes, Total message chars: {total_chars}")
+    if use_generate:
+        total_chars = len(full_prompt)
+    else:
+        total_chars = sum(len(str(msg.get("content", ""))) for msg in ollama_messages)
+    print(f"[{get_timestamp()}] [LLM] Payload size: {payload_size} bytes, Total prompt/message chars: {total_chars}")
     
     try:
         # Check if model is already loaded before making request
         base_url = model_url
         if base_url.endswith("/api/chat"):
             base_url = base_url[:-9]
+        elif base_url.endswith("/api/generate"):
+            base_url = base_url[:-13]
         if base_url.endswith("/"):
             base_url = base_url[:-1]
         ps_endpoint = f"{base_url}/api/ps"
@@ -662,8 +724,14 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             total_time = time.time() - request_start
             print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)}, HTTP wait: {format_duration(http_start)})")
             
-            # Log response size
-            response_content = result.get("message", {}).get("content", "")
+            # Extract response based on endpoint type
+            if use_generate:
+                # /api/generate returns response directly
+                response_content = result.get("response", "")
+            else:
+                # /api/chat returns message.content
+                response_content = result.get("message", {}).get("content", "")
+            
             if response_content:
                 print(f"[{get_timestamp()}] [LLM] Response content length: {len(response_content)} chars")
             
@@ -771,7 +839,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # Debug: log prompt length
             print(f"[{get_timestamp()}] [PROMPT] Structured prompt length: {len(structured_prompt)} chars")
             
-            return await query_ollama(messages, structured_prompt, model_url, model_name=model_name, use_structured=True)
+            return await query_ollama(messages, structured_prompt, model_url, model_name=model_name, use_structured=True, use_generate=True)
         else:
             # Legacy Ollama approach
             # Get current date for context (vulnerable to command injection in naive mode)
@@ -858,7 +926,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
             
-            return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
+            return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name, use_generate=False)
 
     # Construct the full prompt including system instructions (for OpenAI)
     # Get current date for context (vulnerable to command injection in naive mode)
@@ -933,12 +1001,13 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     last_user = user_msgs[-1].get("content", "")[:200]
                     print(f"[{get_timestamp()}] [DEBUG] Last user message preview: {last_user}...")
             print(f"[{get_timestamp()}] [DEBUG] OpenAI Request - Model: gpt-4o-mini, Temperature: 0")
+            openai_start = time.time()
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=openai_messages,
                 temperature=0
             )
-            print(f"[{get_timestamp()}] [LLM] OpenAI response received ({format_duration(request_start)})")
+            print(f"[{get_timestamp()}] [LLM] OpenAI response received ({format_duration(openai_start)})")
             return response.choices[0].message.content
         except Exception as e:
             print(f"OpenAI Error: {e}")
