@@ -686,10 +686,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     "3. JSON format for tool calls: {\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}.\n"
                     "4. If no tools are available or the user did NOT use @server_name, respond with TEXT only (no JSON).\n"
                     "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
-                    "\nExamples:\n"
-                    "- User: \"@booking find hotels in Madrid\" -> {\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\"}}\n"
-                    "- User: \"Hi there\" -> plain text greeting only.\n"
-                    "- User: \"What's the weather in Paris?\" (no @server) -> plain text answer only.\n\n"
                 )
                 # Weather flow guidance (two-step) for legacy path
                 has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools or [])
