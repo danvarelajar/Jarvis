@@ -280,17 +280,39 @@ def calculate_specific_dates(user_query: str, current_date: str, today: datetime
     date_pattern = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', user_query)  # Use original case for exact match
     if date_pattern:
         part1, part2, year = int(date_pattern.group(1)), int(date_pattern.group(2)), int(date_pattern.group(3))
-        # Try DD/MM/YYYY first (more common internationally)
+        # Try both formats and use the one that makes sense (future date, not too far in past)
+        dd_mm_yyyy_valid = False
+        mm_dd_yyyy_valid = False
+        dd_mm_date = None
+        mm_dd_date = None
+        
+        # Try DD/MM/YYYY first
         try:
-            parsed_date = datetime(year, part2, part1)
-            specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')} (DD/MM/YYYY format)")
+            dd_mm_date = datetime(year, part2, part1)
+            if dd_mm_date >= today - timedelta(days=30):  # Allow dates up to 30 days in past
+                dd_mm_yyyy_valid = True
         except ValueError:
-            # Try MM/DD/YYYY if DD/MM fails
-            try:
-                parsed_date = datetime(year, part1, part2)
-                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')} (MM/DD/YYYY format)")
-            except ValueError:
-                pass
+            pass
+        
+        # Try MM/DD/YYYY
+        try:
+            mm_dd_date = datetime(year, part1, part2)
+            if mm_dd_date >= today - timedelta(days=30):  # Allow dates up to 30 days in past
+                mm_dd_yyyy_valid = True
+        except ValueError:
+            pass
+        
+        # Prefer the format that gives a future date (or closer to today if both are valid)
+        if dd_mm_yyyy_valid and mm_dd_yyyy_valid:
+            # Both valid - prefer the one closer to today (likely what user meant)
+            if abs((dd_mm_date - today).days) < abs((mm_dd_date - today).days):
+                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
+            else:
+                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY)")
+        elif dd_mm_yyyy_valid:
+            specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
+        elif mm_dd_yyyy_valid:
+            specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY)")
     
     if specific_dates:
         return "\n".join(specific_dates) + "\n"
@@ -498,8 +520,15 @@ def build_structured_prompt_gemma(
     prompt += "## DATE CONTEXT (CRITICAL - USE THESE EXACT DATES)\n"
     prompt += date_context
     prompt += "\n"
-    prompt += "IMPORTANT: When you see dates in the user query, match them to the SPECIFIC DATES listed above.\n"
-    prompt += "Example: If user says '07/01/2026' and above shows '2026-01-07', use '2026-01-07'.\n"
+    prompt += "CRITICAL DATE EXTRACTION RULES:\n"
+    prompt += "1. When you see dates in the user query (e.g., '02/01/2026', 'tomorrow', 'next Friday'), find the EXACT YYYY-MM-DD format in the DATE CONTEXT section above.\n"
+    prompt += "2. Use the EXACT date from DATE CONTEXT - do NOT calculate or guess dates yourself.\n"
+    prompt += "3. If the user says 'checkout on 02/01/2026', find '02/01/2026' in DATE CONTEXT and use the YYYY-MM-DD format shown there.\n"
+    prompt += "4. Do NOT add days to other dates - use the ACTUAL parsed date from DATE CONTEXT.\n"
+    prompt += "5. Example: If user says 'checkin tomorrow and checkout on 02/01/2026':\n"
+    prompt += "   - Find 'tomorrow' in DATE CONTEXT -> use that YYYY-MM-DD date for checkInDate\n"
+    prompt += "   - Find '02/01/2026' in DATE CONTEXT -> use that YYYY-MM-DD date for checkOutDate\n"
+    prompt += "   - Do NOT calculate checkout as checkin + 1 day\n"
     prompt += "\n"
     
     # DATE FORMAT REQUIREMENT (for booking tools)
@@ -702,7 +731,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     """
     if not model_url:
         return "Error: Ollama URL is not set."
-    
+        
     # Determine endpoint based on use_generate flag
     if use_generate:
         # Use /api/generate endpoint
@@ -720,7 +749,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
                 api_endpoint += "api/chat"
             else:
                 api_endpoint += "/api/chat"
-    
+            
     print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
     if use_structured:
         print(f"[{get_timestamp()}] DEBUG: Using structured prompt with Gemma control tokens")
@@ -746,22 +775,22 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     else:
         # Legacy /api/chat format
         ollama_messages = [{"role": "system", "content": system_prompt}]
+    
+    for msg in messages:
+        # Map roles if necessary, but "user" and "assistant" are standard
+        role = msg["role"]
+        if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
+        ollama_messages.append({"role": role, "content": msg["content"]})
         
-        for msg in messages:
-            # Map roles if necessary, but "user" and "assistant" are standard
-            role = msg["role"]
-            if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
-            ollama_messages.append({"role": role, "content": msg["content"]})
-        
-        payload = {
+    payload = {
             "model": model_name,
-            "messages": ollama_messages,
-            "stream": False,
+        "messages": ollama_messages,
+        "stream": False,
             "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
-            "options": {
-                "temperature": 0 # Low temp for tool execution
-            }
+        "options": {
+            "temperature": 0 # Low temp for tool execution
         }
+    }
     
     # Log payload size for debugging
     import json as json_module
@@ -1207,8 +1236,8 @@ def parse_llm_response(response_content: str) -> dict:
         
         # Validate with Pydantic
         try:
-            tool_call = ToolCall(**data)
-            return {"type": "tool_call", "data": tool_call}
+        tool_call = ToolCall(**data)
+        return {"type": "tool_call", "data": tool_call}
         except ValidationError as ve:
             # If validation fails, provide helpful error
             print(f"[{get_timestamp()}] [PARSE] Tool call validation failed: {ve}", flush=True)

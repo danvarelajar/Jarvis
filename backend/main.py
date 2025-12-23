@@ -678,9 +678,14 @@ async def chat(request: ChatRequest, req: Request):
                     "content": (
                         "CRITICAL: Use ONLY booking__search_hotels and call the tool NOW. "
                         "Output JSON only, no text.\n"
-                        f"User request: '{user_message}'. Extract the CITY and DATES from THIS request only (not from earlier conversation).\n"
-                        "Example (use placeholders, then REPLACE with values from the user): "
-                        "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<START_DATE_FROM_USER>\", \"checkOutDate\": \"<END_DATE_FROM_USER>\", \"rooms\": <ROOMS_FROM_USER_OR_ASK>}}"
+                        f"User request: '{user_message}'. Extract CITY, CHECKIN, CHECKOUT, ROOMS from THIS request only.\n"
+                        "CRITICAL DATE EXTRACTION:\n"
+                        "- For dates like 'tomorrow', '02/01/2026', etc., find the EXACT YYYY-MM-DD format in the DATE CONTEXT section.\n"
+                        "- Use the ACTUAL parsed date from DATE CONTEXT - do NOT calculate checkout as checkin + 1 day.\n"
+                        "- If user says 'checkout on 02/01/2026', use the YYYY-MM-DD date shown for '02/01/2026' in DATE CONTEXT.\n"
+                        "CRITICAL: Extract ACTUAL values from the user's query above. Do NOT use 'Madrid' or any example values.\n"
+                        "Example format (REPLACE placeholders with ACTUAL values from user query and DATE CONTEXT): "
+                        "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"<EXTRACT_CITY>\", \"checkInDate\": \"<FROM_DATE_CONTEXT>\", \"checkOutDate\": \"<FROM_DATE_CONTEXT>\", \"rooms\": <EXTRACT_ROOMS>}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=hotels; exposing booking__search_hotels only.", flush=True)
