@@ -390,7 +390,8 @@ def build_structured_prompt_gemma(
     tools: List[dict],
     date_context: str,
     agent_mode: str = "defender",
-    user_query: str = ""
+    user_query: str = "",
+    model_name: str = ""
 ) -> str:
     """
     Builds a structured system prompt using Gemma control tokens for optimal parsing by small models.
@@ -453,17 +454,31 @@ def build_structured_prompt_gemma(
         )
     prompt += "\n"
     
+    # Detect if this is gemma3-mcp model (uses <start_function_call> format)
+    use_function_call_tokens = "gemma3-mcp" in model_name.lower()
+    
     # GLOBAL TOOL RULES
     prompt += "## GLOBAL TOOL RULES\n"
-    prompt += (
-        "1. ONLY use tools if user used @server_name prefix (e.g., @weather, @booking).\n"
-        "2. Use EXACT tool names and parameter names from registry. NO synonyms.\n"
-        "3. JSON format: {\"tool\": \"name\", \"arguments\": {\"param\": \"value\"}}.\n"
-        "4. Extract argument values from MOST RECENT user message only.\n"
-        "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
-        "6. If no tools available, respond with TEXT only (no JSON).\n"
-        "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
-    )
+    if use_function_call_tokens:
+        prompt += (
+            "1. ONLY use tools if user used @server_name prefix (e.g., @weather, @booking).\n"
+            "2. Use EXACT tool names and parameter names from registry. NO synonyms.\n"
+            "3. Use <start_function_call> format: <start_function_call>{\"tool\": \"name\", \"arguments\": {\"param\": \"value\"}}<end_function_call>\n"
+            "4. Extract argument values from MOST RECENT user message only.\n"
+            "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
+            "6. If no tools available, respond with TEXT only (no function calls).\n"
+            "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
+        )
+    else:
+        prompt += (
+            "1. ONLY use tools if user used @server_name prefix (e.g., @weather, @booking).\n"
+            "2. Use EXACT tool names and parameter names from registry. NO synonyms.\n"
+            "3. JSON format: {\"tool\": \"name\", \"arguments\": {\"param\": \"value\"}}.\n"
+            "4. Extract argument values from MOST RECENT user message only.\n"
+            "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
+            "6. If no tools available, respond with TEXT only (no JSON).\n"
+            "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
+        )
     prompt += "\n"
     
     # WEATHER FLOW GUIDANCE (if weather tools present)
@@ -490,10 +505,16 @@ def build_structured_prompt_gemma(
     if tools:
         # Example 1: Tool call
         example_tool = tools[0].get("name", "example_tool")
-        prompt += (
-            f"User: \"@booking find hotels in <CITY>\"\n"
-            f"Assistant: {{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}\n\n"
-        )
+        if use_function_call_tokens:
+            prompt += (
+                f"User: \"@booking find hotels in <CITY>\"\n"
+                f"Assistant: <start_function_call>{{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}<end_function_call>\n\n"
+            )
+        else:
+            prompt += (
+                f"User: \"@booking find hotels in <CITY>\"\n"
+                f"Assistant: {{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}\n\n"
+            )
         # Example 2: Text response
         prompt += (
             "User: \"Hi there\"\n"
@@ -743,7 +764,8 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 tools=tools_to_use,
                 date_context=date_context,
                 agent_mode=agent_mode,
-                user_query=user_query_for_rag
+                user_query=user_query_for_rag,
+                model_name=model_name
             )
             
             # Debug: log prompt length
@@ -932,25 +954,32 @@ def parse_llm_response(response_content: str) -> dict:
     try:
         # Attempt to find JSON object using regex
         import re
-        # Look for a JSON object structure: { ... }
-        # This regex is simple and might need refinement for nested braces, 
-        # but for simple tool calls it usually works.
-        # We look for the first '{' and the last '}'
-        match = re.search(r'(\{.*\})', response_content.replace('\n', ' '), re.DOTALL)
         
-        json_str = ""
-        if match:
-            json_str = match.group(1)
+        # Check for <start_function_call> format (gemma3-mcp model)
+        function_call_match = re.search(r'<start_function_call>(.*?)<end_function_call>', response_content, re.DOTALL)
+        if function_call_match:
+            json_str = function_call_match.group(1).strip()
+            print(f"[{get_timestamp()}] [PARSE] Detected <start_function_call> format", flush=True)
         else:
-            # Fallback: try cleaning markdown code blocks
-            clean_content = response_content.strip()
-            if clean_content.startswith("```json"):
-                clean_content = clean_content[7:]
-            if clean_content.startswith("```"):
-                clean_content = clean_content[3:]
-            if clean_content.endswith("```"):
-                clean_content = clean_content[:-3]
-            json_str = clean_content.strip()
+            # Look for a JSON object structure: { ... }
+            # This regex is simple and might need refinement for nested braces, 
+            # but for simple tool calls it usually works.
+            # We look for the first '{' and the last '}'
+            match = re.search(r'(\{.*\})', response_content.replace('\n', ' '), re.DOTALL)
+            
+            json_str = ""
+            if match:
+                json_str = match.group(1)
+            else:
+                # Fallback: try cleaning markdown code blocks
+                clean_content = response_content.strip()
+                if clean_content.startswith("```json"):
+                    clean_content = clean_content[7:]
+                if clean_content.startswith("```"):
+                    clean_content = clean_content[3:]
+                if clean_content.endswith("```"):
+                    clean_content = clean_content[:-3]
+                json_str = clean_content.strip()
 
         data = json.loads(json_str)
         
