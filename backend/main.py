@@ -626,24 +626,6 @@ async def chat(request: ChatRequest, req: Request):
     # Track if we're in loop detection mode (tools removed due to repeated tool calls)
     loop_detected = False
     
-    # Weather tool flow state: enforce two-step process
-    # Step 1: Only show weather__search_location (user has location name)
-    # Step 2: Only show weather__get_complete_forecast (coordinates available)
-    weather_flow_state = None  # None, "need_search", "need_forecast"
-    weather_coordinates = None  # Store coordinates from search_location result
-    
-    # Detect if this is a weather query
-    has_weather_tools = any("weather__" in t.get("name", "") for t in tools)
-    if has_weather_tools:
-        # Check if user query contains a location name (not coordinates)
-        user_message_lower = user_message.lower()
-        # Simple heuristic: if query mentions weather and a location name (not numbers/coordinates)
-        if any(word in user_message_lower for word in ["weather", "forecast", "temperature", "rain", "sunny", "cloudy"]):
-            # Check if it's a location name (contains text, not just numbers)
-            # If user mentions a city/location, we need step 1
-            weather_flow_state = "need_search"
-            print(f"[{get_timestamp()}] [WEATHER_FLOW] Detected weather query - enforcing two-step flow: Step 1 (search_location)", flush=True)
-    
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
         turn_start = time.time()
@@ -656,33 +638,50 @@ async def chat(request: ChatRequest, req: Request):
             else:
                 print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
         
-        # Weather flow: Filter tools based on current step
-        # Only filter weather tools, keep all other tools available
+        # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
-        if weather_flow_state == "need_search":
-            # Step 1: Hide weather__get_complete_forecast, keep weather__search_location and all other tools
-            tools_to_send = [t for t in tools_to_send if "weather__get_complete_forecast" not in t.get("name", "")]
-            if any("weather__" in t.get("name", "") for t in tools_to_send):
-                print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 1: Only exposing 'weather__search_location' (hiding 'weather__get_complete_forecast')", flush=True)
-                # Add explicit instruction to extract location from user query
-                if turn_index == 0:  # Only on first turn
-                    location_instruction = (
-                        f"\n\n🚨 CRITICAL: WEATHER FLOW STEP 1 - YOU MUST CALL THE TOOL NOW 🚨\n"
-                        f"You MUST call 'weather__search_location' with the location name from the user's query. "
-                        f"The user asked about: '{user_message}'. Extract the location name (e.g., 'Madrid') and call the tool immediately. "
-                        f"DO NOT generate weather data yourself. DO NOT return text. You MUST output JSON to call 'weather__search_location' with the location parameter. "
-                        f"If several locations are returned ask right away which one the user is referring to. "
-                        f"Example: {{\"tool\": \"weather__search_location\", \"arguments\": {{\"city\": \"Madrid\"}}}}"
-                    )
-                    if current_messages and current_messages[-1].get("role") == "user":
-                        current_messages[-1]["content"] += location_instruction
-                    else:
-                        current_messages.append({"role": "user", "content": location_instruction})
-        elif weather_flow_state == "need_forecast":
-            # Step 2: Hide weather__search_location, keep weather__get_complete_forecast and all other tools
-            tools_to_send = [t for t in tools_to_send if "weather__search_location" not in t.get("name", "")]
-            if any("weather__" in t.get("name", "") for t in tools_to_send):
-                print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 2: Only exposing 'weather__get_complete_forecast' (hiding 'weather__search_location')", flush=True)
+        has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
+        if has_booking_tools and "@booking" in user_message.lower():
+            msg_low = user_message.lower()
+            intent = None
+            if any(k in msg_low for k in ["hotel", "hotels", "stay", "room"]):
+                intent = "hotels"
+            elif any(k in msg_low for k in ["flight", "flights", "fly", "airline"]):
+                intent = "flights"
+            elif any(k in msg_low for k in ["itinerary", "plan trip", "full trip", "complete trip"]):
+                intent = "itinerary"
+            if not intent:
+                clarification = (
+                    "I can help with booking. Please specify one of: "
+                    "1) search hotels, 2) search flights, 3) create itinerary.\n"
+                    "Examples:\n"
+                    "- Hotels: '@booking find hotels in Madrid for Jan 10-12'\n"
+                    "- Flights: '@booking find flights from Madrid to Paris on Jan 10'\n"
+                    "- Itinerary: '@booking create itinerary Madrid to Paris Jan 10-15 with hotel and flights'"
+                )
+                print(f"[{get_timestamp()}] [BOOKING] Intent unclear, asking user to clarify.", flush=True)
+                return {"role": "assistant", "content": clarification}
+            if intent == "hotels":
+                tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__search_hotels"]
+                current_messages.append({
+                    "role": "user",
+                    "content": "Use only booking__search_hotels. Example: {\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                })
+                print(f"[{get_timestamp()}] [BOOKING] Routing intent=hotels; exposing booking__search_hotels only.", flush=True)
+            elif intent == "flights":
+                tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__search_flights"]
+                current_messages.append({
+                    "role": "user",
+                    "content": "Use only booking__search_flights. Example: {\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"MAD\", \"to\": \"CDG\", \"departDate\": \"YYYY-MM-DD\"}}"
+                })
+                print(f"[{get_timestamp()}] [BOOKING] Routing intent=flights; exposing booking__search_flights only.", flush=True)
+            elif intent == "itinerary":
+                tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__create_itinerary"]
+                current_messages.append({
+                    "role": "user",
+                    "content": "Use only booking__create_itinerary. Example: {\"tool\": \"booking__create_itinerary\", \"arguments\": {\"origin\": \"Madrid\", \"destination\": \"Paris\", \"departDate\": \"YYYY-MM-DD\", \"returnDate\": \"YYYY-MM-DD\"}}"
+                })
+                print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
         
         # Query LLM
         # Enable Qwen RAG approach when using Ollama provider

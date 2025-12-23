@@ -543,6 +543,28 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 "- User: \"Hi there\" -> plain text greeting only.\n"
                 "- User: \"What's the weather in Paris?\" (no @server) -> plain text answer only.\n\n"
             )
+            # Weather flow guidance (two-step) for RAG path
+            has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools or [])
+            if has_weather_tools:
+                tool_context += (
+                    "### WEATHER FLOW (TWO-STEP)\n"
+                    "Step 1: Call weather__search_location with the city/location name from the user.\n"
+                    "  Example: {\"tool\": \"weather__search_location\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                    "Step 2: After you get coordinates, call weather__get_complete_forecast with EXACT latitude and longitude from step 1.\n"
+                    "  Example: {\"tool\": \"weather__get_complete_forecast\", \"arguments\": {\"latitude\": 40.4168, \"longitude\": -3.7038}}\n"
+                    "Rules: Do NOT hallucinate coordinates. Do NOT pass 'location' to weather__get_complete_forecast. Use only the coordinates returned by weather__search_location.\n\n"
+                )
+            # Weather flow guidance (two-step)
+            has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools or [])
+            if has_weather_tools:
+                tool_context += (
+                    "### WEATHER FLOW (TWO-STEP)\n"
+                    "Step 1: Call weather__search_location with the city/location name from the user.\n"
+                    "  Example: {\"tool\": \"weather__search_location\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                    "Step 2: After you get coordinates, call weather__get_complete_forecast with EXACT latitude and longitude from step 1.\n"
+                    "  Example: {\"tool\": \"weather__get_complete_forecast\", \"arguments\": {\"latitude\": 40.4168, \"longitude\": -3.7038}}\n"
+                    "Rules: Do NOT hallucinate coordinates. Do NOT pass 'location' to weather__get_complete_forecast. Use only the coordinates returned by weather__search_location.\n\n"
+                )
             
             # Get current date for context (vulnerable to command injection in naive mode)
             current_date, current_datetime = get_current_date(agent_mode)
@@ -651,9 +673,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 ollama_system_prompt += f"**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
                 ollama_system_prompt += f"**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location' or 'weather__find_location'.**\n\n"
                 
-                # Note: Weather tool sequence enforcement is handled by main.py via tool filtering and state machine
-                # We don't add weather-specific warnings here to avoid conflicts with the enforcement logic
-                
                 tool_descriptions = json.dumps(tools, indent=2)
                 ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\n"
                 
@@ -672,6 +691,17 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                     "- User: \"Hi there\" -> plain text greeting only.\n"
                     "- User: \"What's the weather in Paris?\" (no @server) -> plain text answer only.\n\n"
                 )
+                # Weather flow guidance (two-step) for legacy path
+                has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools or [])
+                if has_weather_tools:
+                    ollama_system_prompt += (
+                        "### WEATHER FLOW (TWO-STEP)\n"
+                        "Step 1: Call weather__search_location with the city/location name from the user.\n"
+                        "  Example: {\"tool\": \"weather__search_location\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                        "Step 2: After you get coordinates, call weather__get_complete_forecast with EXACT latitude and longitude from step 1.\n"
+                        "  Example: {\"tool\": \"weather__get_complete_forecast\", \"arguments\": {\"latitude\": 40.4168, \"longitude\": -3.7038}}\n"
+                        "Rules: Do NOT hallucinate coordinates. Do NOT pass 'location' to weather__get_complete_forecast. Use only the coordinates returned by weather__search_location.\n\n"
+                    )
             else:
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
