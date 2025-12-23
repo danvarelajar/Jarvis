@@ -1147,15 +1147,27 @@ async def chat(request: ChatRequest, req: Request):
                 except TimeoutError as e:
                     error_msg = f"Tool '{canonical_tool_name}' on server '{server_to_call}' timed out after 60 seconds. The server may be unresponsive or overloaded."
                     print(f"[{get_timestamp()}] [TOOL] Tool execution failed: {error_msg}", flush=True)
-                    current_messages.append({"role": "assistant", "content": response_content})
-                    current_messages.append({"role": "user", "content": f"Tool Error: {error_msg}. Please try again or check if the server is available."})
-                    continue
+                    # Remove tools and return polite error message to user
+                    tools = []
+                    tools_to_send = []
+                    polite_error = (
+                        f"I apologize, but I encountered an error while trying to execute the '{canonical_tool_name}' tool. "
+                        f"The tool timed out after 60 seconds, which suggests the server may be unresponsive or overloaded. "
+                        f"Please try again in a moment, or check if the service is available."
+                    )
+                    return {"role": "assistant", "content": polite_error}
                 except Exception as e:
                     error_msg = f"Error executing tool '{canonical_tool_name}': {str(e)}"
                     print(f"[{get_timestamp()}] [TOOL] Tool execution failed: {error_msg}", flush=True)
-                    current_messages.append({"role": "assistant", "content": response_content})
-                    current_messages.append({"role": "user", "content": f"Tool Error: {error_msg}"})
-                    continue
+                    # Remove tools and return polite error message to user
+                    tools = []
+                    tools_to_send = []
+                    polite_error = (
+                        f"I apologize, but I encountered an error while trying to execute the '{canonical_tool_name}' tool. "
+                        f"An error was found: {str(e)}. "
+                        f"Please try again with your request, or check if the service is available."
+                    )
+                    return {"role": "assistant", "content": polite_error}
                 
                     # Extract text content or serialize object
                 tool_output = ""
@@ -1180,6 +1192,46 @@ async def chat(request: ChatRequest, req: Request):
                         tool_output = json.dumps(data, separators=(',', ':'))
                     except:
                         tool_output = str(result)
+                
+                # Check if tool output contains an error (check JSON error responses or error keywords)
+                is_error = False
+                error_message = ""
+                try:
+                    # Try to parse as JSON to check for error responses
+                    import json
+                    parsed_output = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                    if isinstance(parsed_output, dict):
+                        # Check for common error fields in JSON responses
+                        if "error" in parsed_output:
+                            is_error = True
+                            error_message = str(parsed_output.get("error", ""))
+                        elif "message" in parsed_output and any(keyword in str(parsed_output.get("message", "")).lower() for keyword in ["error", "failed", "invalid", "exception"]):
+                            is_error = True
+                            error_message = str(parsed_output.get("message", ""))
+                except:
+                    # Not JSON, check for error keywords in text (only for short outputs to avoid false positives)
+                    if len(tool_output) < 500:
+                        tool_output_lower = tool_output.lower()
+                        # Check for clear error indicators
+                        if any(phrase in tool_output_lower for phrase in [
+                            "error:", "error ", "failed:", "exception:", "invalid parameter",
+                            "invalid argument", "validation error", "required parameter"
+                        ]):
+                            is_error = True
+                            error_message = tool_output[:200]
+                
+                # If tool returned an error, return polite message to user
+                if is_error:
+                    tools = []
+                    tools_to_send = []
+                    error_detail = error_message if error_message else tool_output[:200]
+                    polite_error = (
+                        f"I apologize, but I encountered an error while trying to execute the '{canonical_tool_name}' tool. "
+                        f"An error was found: {error_detail}. "
+                        f"Please try again with your request, or check if the service is available."
+                    )
+                    print(f"[{get_timestamp()}] [TOOL] Tool returned error in output: {error_detail}", flush=True)
+                    return {"role": "assistant", "content": polite_error}
                 
                 # Truncate if too long to prevent LLM timeout/context overflow
                 # Truncate if too long to prevent LLM timeout/context overflow
