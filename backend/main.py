@@ -669,21 +669,33 @@ async def chat(request: ChatRequest, req: Request):
                 tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__search_hotels"]
                 current_messages.append({
                     "role": "user",
-                    "content": "Use only booking__search_hotels. Example: {\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                    "content": (
+                        "CRITICAL: Use ONLY booking__search_hotels and call the tool NOW. "
+                        "Output JSON only, no text. Example: "
+                        "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                    )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=hotels; exposing booking__search_hotels only.", flush=True)
             elif intent == "flights":
                 tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__search_flights"]
                 current_messages.append({
                     "role": "user",
-                    "content": "Use only booking__search_flights. Example: {\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"MAD\", \"to\": \"CDG\", \"departDate\": \"YYYY-MM-DD\"}}"
+                    "content": (
+                        "CRITICAL: Use ONLY booking__search_flights and call the tool NOW. "
+                        "Output JSON only, no text. Example: "
+                        "{\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"MAD\", \"to\": \"CDG\", \"departDate\": \"YYYY-MM-DD\"}}"
+                    )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=flights; exposing booking__search_flights only.", flush=True)
             elif intent == "itinerary":
                 tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__create_itinerary"]
                 current_messages.append({
                     "role": "user",
-                    "content": "Use only booking__create_itinerary. Example: {\"tool\": \"booking__create_itinerary\", \"arguments\": {\"origin\": \"Madrid\", \"destination\": \"Paris\", \"departDate\": \"YYYY-MM-DD\", \"returnDate\": \"YYYY-MM-DD\"}}"
+                    "content": (
+                        "CRITICAL: Use ONLY booking__create_itinerary and call the tool NOW. "
+                        "Output JSON only, no text. Example: "
+                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"origin\": \"Madrid\", \"destination\": \"Paris\", \"departDate\": \"YYYY-MM-DD\", \"returnDate\": \"YYYY-MM-DD\"}}"
+                    )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
         
