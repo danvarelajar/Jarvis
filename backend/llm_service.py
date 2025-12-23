@@ -523,29 +523,26 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                             tool_context += f"  - `{param_name}` ({param_type}){req_marker}: {param_desc}\n"
                     
                     tool_context += f"\n**Full Input Schema (JSON):**\n```json\n{json.dumps(input_schema, indent=2)}\n```\n\n"
-                    # List exact parameter names to emphasize
-                    # Note: Weather tool sequence enforcement is handled by main.py via tool filtering and state machine
-                    exact_params = list(properties.keys())
-                    if exact_params:
-                        param_list = ", ".join([f"'{p}'" for p in exact_params])
-                        tool_context += (
-                            f"**CRITICAL PARAMETER RULES:**\n"
-                            f"1. Use ONLY these exact parameter names: {param_list}\n"
-                            f"2. Do NOT use synonyms (e.g., 'origin'/'destination'/'city' - use 'from'/'to')\n"
-                            f"3. Do NOT add parameters that are NOT in this list (e.g., do NOT add 'city' if it's not listed)\n"
-                            f"4. If a parameter is not in the list above, DO NOT include it in your tool call\n"
-                            f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n"
-                            f"6. **FORBIDDEN**: Do NOT add 'adults', 'guests', 'people', 'persons', or any other parameter NOT explicitly listed above\n"
-                            f"7. **STRICT ENFORCEMENT**: If you see parameters like 'city', 'checkInDate', 'checkOutDate', 'rooms' - use ONLY these. Do NOT add 'adults' or any other parameter.\n\n"
-                        )
-                    else:
-                        tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms. Do NOT add parameters that are not listed.**\n\n"
             else:
                 # Fallback: include all tools if RAG found nothing
                 if tools:
                     tool_context += json.dumps(tools, indent=2)
                 else:
                     tool_context += "No tools available. Respond with text only (no JSON, no tool calls)."
+
+            # Global tool rules (single place, to reduce prompt size and leverage recency for small models)
+            tool_context += (
+                "\n### GLOBAL TOOL RULES (MANDATORY)\n"
+                "1. ONLY use tools if the user used the @server_name prefix (e.g., @weather, @booking).\n"
+                "2. Use EXACT tool names and parameter names from the documentation. NO synonyms. NO extra parameters.\n"
+                "3. JSON format for tool calls: {\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}.\n"
+                "4. If no tools are available or the user did NOT use @server_name, respond with TEXT only (no JSON).\n"
+                "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
+                "\nExamples:\n"
+                "- User: \"@booking find hotels in Madrid\" -> {\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                "- User: \"Hi there\" -> plain text greeting only.\n"
+                "- User: \"What's the weather in Paris?\" (no @server) -> plain text answer only.\n\n"
+            )
             
             # Get current date for context (vulnerable to command injection in naive mode)
             current_date, current_datetime = get_current_date(agent_mode)
@@ -661,6 +658,20 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 ollama_system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\n"
                 
                 ollama_system_prompt += f"You MUST use these tools to answer queries. Use the EXACT tool names listed above. Do not say you cannot access them. Just output the JSON to call them."
+                
+                # Global tool rules (single place, to reduce prompt size and leverage recency for small models)
+                ollama_system_prompt += (
+                    "\n### GLOBAL TOOL RULES (MANDATORY)\n"
+                    "1. ONLY use tools if the user used the @server_name prefix (e.g., @weather, @booking).\n"
+                    "2. Use EXACT tool names and parameter names from the documentation. NO synonyms. NO extra parameters.\n"
+                    "3. JSON format for tool calls: {\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}.\n"
+                    "4. If no tools are available or the user did NOT use @server_name, respond with TEXT only (no JSON).\n"
+                    "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
+                    "\nExamples:\n"
+                    "- User: \"@booking find hotels in Madrid\" -> {\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                    "- User: \"Hi there\" -> plain text greeting only.\n"
+                    "- User: \"What's the weather in Paris?\" (no @server) -> plain text answer only.\n\n"
+                )
             else:
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
