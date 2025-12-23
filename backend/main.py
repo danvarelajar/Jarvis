@@ -578,7 +578,26 @@ async def chat(request: ChatRequest, req: Request):
     # 3. Agent Loop
     # We allow up to 20 turns to prevent infinite loops
     # If no tools are loaded, give the model a hint about how to enable them.
-    current_messages = request.messages.copy()
+    # RESET HISTORY: Only use the most recent user message to prevent context mixing between requests
+    # This ensures each request starts fresh and doesn't mix with previous conversations
+    if request.messages and len(request.messages) > 0:
+        # Find the most recent user message
+        last_user_message = None
+        for msg in reversed(request.messages):
+            if msg.get("role") == "user":
+                last_user_message = msg
+                break
+        
+        if last_user_message:
+            # Start fresh with only the current user message
+            current_messages = [last_user_message]
+            print(f"[{get_timestamp()}] [HISTORY] Reset conversation history - using only current user message", flush=True)
+        else:
+            # Fallback: use all messages if no user message found
+            current_messages = request.messages.copy()
+            print(f"[{get_timestamp()}] [HISTORY] No user message found, using all messages", flush=True)
+    else:
+        current_messages = []
     if agent_mode == "defender":
         # Add explicit guardrails (tool outputs + tool descriptions are untrusted).
         current_messages.insert(0, {
