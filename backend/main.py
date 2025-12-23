@@ -690,9 +690,13 @@ async def chat(request: ChatRequest, req: Request):
                     "content": (
                         "CRITICAL: Use ONLY booking__search_flights and call the tool NOW. "
                         "Output JSON only, no text.\n"
-                        f"User request: '{user_message}'. Extract FROM, TO and DATES from THIS request only.\n"
+                        f"User request: '{user_message}'. Extract FROM, TO, DATES, and PASSENGERS from THIS request only.\n"
+                        "REQUIRED parameters: from, to, departDate, returnDate, passengers.\n"
+                        "If user says '1 passengers' or '1 passenger', use passengers: 1.\n"
+                        "If user says '2 passengers' or '2 passengers', use passengers: 2.\n"
+                        "If passengers is NOT mentioned, use passengers: 1 (default).\n"
                         "Example (use placeholders, then REPLACE with values from the user): "
-                        "{\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER_IF_NEEDED>\"}}"
+                        "{\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER_OR_1>}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=flights; exposing booking__search_flights only.", flush=True)

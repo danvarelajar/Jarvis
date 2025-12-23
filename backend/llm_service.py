@@ -505,7 +505,8 @@ def build_structured_prompt_gemma(
     # DATE FORMAT REQUIREMENT (for booking tools)
     has_booking_tools = any("booking__" in (t.get("name") or "") for t in tools)
     if has_booking_tools:
-        prompt += "## DATE FORMAT REQUIREMENT (CRITICAL FOR BOOKING TOOLS)\n"
+        prompt += "## BOOKING TOOL REQUIREMENTS (CRITICAL)\n"
+        prompt += "### DATE FORMAT:\n"
         prompt += (
             "ALL date parameters (departDate, returnDate, checkInDate, checkOutDate) MUST be in YYYY-MM-DD format.\n"
             "Examples:\n"
@@ -515,6 +516,16 @@ def build_structured_prompt_gemma(
             "- 'February 2, 2026' is WRONG (do NOT use text format)\n"
             "CRITICAL: Convert ALL dates to YYYY-MM-DD format before calling booking tools.\n"
             "Use the DATE CONTEXT section above to find the correct YYYY-MM-DD format for dates mentioned by the user.\n"
+        )
+        prompt += "\n### PASSENGERS PARAMETER:\n"
+        prompt += (
+            "For booking__search_flights and booking__create_itinerary, the 'passengers' parameter is REQUIRED.\n"
+            "Extract passengers from the user query:\n"
+            "- If user says '1 passengers' or '1 passenger', use passengers: 1\n"
+            "- If user says '2 passengers' or '2 passengers', use passengers: 2\n"
+            "- If user says 'for 3 people', use passengers: 3\n"
+            "- If passengers is NOT mentioned in the query, use passengers: 1 (default to 1)\n"
+            "CRITICAL: Always include 'passengers' parameter in your tool call. It is REQUIRED.\n"
         )
         prompt += "\n"
     
