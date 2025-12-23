@@ -465,7 +465,7 @@ def build_structured_prompt_gemma(
             "2. Use EXACT tool names and parameter names from registry. NO synonyms.\n"
             "3. Use <start_function_call> format: <start_function_call>{\"tool\": \"name\", \"arguments\": {\"param\": \"value\"}}<end_function_call>\n"
             "4. Extract argument values from MOST RECENT user message only.\n"
-            "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
+            "5. CRITICAL: Examples use placeholders like <EXTRACT_CITY_FROM_USER_QUERY>. You MUST replace these with ACTUAL values from the user's current query. Do NOT use 'Madrid', 'Paris', or any example values.\n"
             "6. If no tools available, respond with TEXT only (no function calls).\n"
             "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
             "8. Do NOT wrap JSON in code blocks (no ```json or ```). Output raw JSON only.\n"
@@ -476,7 +476,7 @@ def build_structured_prompt_gemma(
             "2. Use EXACT tool names and parameter names from registry. NO synonyms.\n"
             "3. JSON format: {\"tool\": \"name\", \"arguments\": {\"param\": \"value\"}}.\n"
             "4. Extract argument values from MOST RECENT user message only.\n"
-            "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
+            "5. CRITICAL: Examples use placeholders like <EXTRACT_CITY_FROM_USER_QUERY>. You MUST replace these with ACTUAL values from the user's current query. Do NOT use 'Madrid', 'Paris', or any example values.\n"
             "6. If no tools available, respond with TEXT only (no JSON).\n"
             "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
             "8. Do NOT wrap JSON in code blocks (no ```json or ```). Output raw JSON only.\n"
@@ -546,14 +546,16 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"2026-02-02\", \"checkOutDate\": \"2026-02-06\", \"rooms\": 1}}}}<end_function_call>\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<EXTRACT_CITY_FROM_USER_QUERY>\", \"checkInDate\": \"<EXTRACT_CHECKIN_FROM_USER_QUERY>\", \"checkOutDate\": \"<EXTRACT_CHECKOUT_FROM_USER_QUERY>\", \"rooms\": <EXTRACT_ROOMS_FROM_USER_QUERY>}}}}<end_function_call>\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use 'Madrid' or example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking find hotels in <CITY> from <CHECKIN> to <CHECKOUT>\"\n"
-                    f"Assistant: {{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"2026-02-02\", \"checkOutDate\": \"2026-02-06\", \"rooms\": 1}}}}\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: {{\"tool\": \"{hotel_tool}\", \"arguments\": {{\"city\": \"<EXTRACT_CITY_FROM_USER_QUERY>\", \"checkInDate\": \"<EXTRACT_CHECKIN_FROM_USER_QUERY>\", \"checkOutDate\": \"<EXTRACT_CHECKOUT_FROM_USER_QUERY>\", \"rooms\": <EXTRACT_ROOMS_FROM_USER_QUERY>}}}}\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use 'Madrid' or example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 2: search_flights (if available)
@@ -562,14 +564,16 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"passengers\": <PASSENGERS_FROM_USER>}}}}<end_function_call>\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<EXTRACT_FROM_FROM_USER_QUERY>\", \"to\": \"<EXTRACT_TO_FROM_USER_QUERY>\", \"departDate\": \"<EXTRACT_DEPART_FROM_USER_QUERY>\", \"returnDate\": \"<EXTRACT_RETURN_FROM_USER_QUERY>\", \"passengers\": <EXTRACT_PASSENGERS_FROM_USER_QUERY>}}}}<end_function_call>\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking find flights from <FROM> to <TO> on <DEPART> returning <RETURN> for <PASSENGERS> passengers\"\n"
-                    f"Assistant: {{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"passengers\": <PASSENGERS_FROM_USER>}}}}\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: {{\"tool\": \"{flight_tool}\", \"arguments\": {{\"from\": \"<EXTRACT_FROM_FROM_USER_QUERY>\", \"to\": \"<EXTRACT_TO_FROM_USER_QUERY>\", \"departDate\": \"<EXTRACT_DEPART_FROM_USER_QUERY>\", \"returnDate\": \"<EXTRACT_RETURN_FROM_USER_QUERY>\", \"passengers\": <EXTRACT_PASSENGERS_FROM_USER_QUERY>}}}}\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 3: create_itinerary (if available)
@@ -578,14 +582,16 @@ def build_structured_prompt_gemma(
             if use_function_call_tokens:
                 prompt += (
                     f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
-                    f"Assistant: <start_function_call>{{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}<end_function_call>\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: <start_function_call>{{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<EXTRACT_FROM_FROM_USER_QUERY>\", \"to\": \"<EXTRACT_TO_FROM_USER_QUERY>\", \"departDate\": \"<EXTRACT_DEPART_FROM_USER_QUERY>\", \"returnDate\": \"<EXTRACT_RETURN_FROM_USER_QUERY>\", \"city\": \"<EXTRACT_CITY_FROM_USER_QUERY>\", \"passengers\": <EXTRACT_PASSENGERS_FROM_USER_QUERY>, \"rooms\": <EXTRACT_ROOMS_FROM_USER_QUERY>}}}}<end_function_call>\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
             else:
                 prompt += (
                     f"User: \"@booking create itinerary from <FROM> to <TO> departing <DEPART> returning <RETURN> for <PASSENGERS> passengers, <ROOMS> rooms in <CITY>\"\n"
-                    f"Assistant: {{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<FROM_FROM_USER>\", \"to\": \"<TO_FROM_USER>\", \"departDate\": \"2026-02-02\", \"returnDate\": \"2026-02-06\", \"city\": \"<CITY_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>}}}}\n"
-                    f"Note: Dates are in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
+                    f"Assistant: {{\"tool\": \"{itinerary_tool}\", \"arguments\": {{\"from\": \"<EXTRACT_FROM_FROM_USER_QUERY>\", \"to\": \"<EXTRACT_TO_FROM_USER_QUERY>\", \"departDate\": \"<EXTRACT_DEPART_FROM_USER_QUERY>\", \"returnDate\": \"<EXTRACT_RETURN_FROM_USER_QUERY>\", \"city\": \"<EXTRACT_CITY_FROM_USER_QUERY>\", \"passengers\": <EXTRACT_PASSENGERS_FROM_USER_QUERY>, \"rooms\": <EXTRACT_ROOMS_FROM_USER_QUERY>}}}}\n"
+                    f"CRITICAL: Replace <EXTRACT_*> placeholders with ACTUAL values from the user's current query. Do NOT use example values.\n"
+                    f"Note: Dates must be in YYYY-MM-DD format (e.g., '2026-02-02', NOT '02/02/2026').\n\n"
                 )
         
         # Example 4: search_location (weather) (if available)
