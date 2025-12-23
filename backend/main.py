@@ -921,7 +921,15 @@ async def chat(request: ChatRequest, req: Request):
                                 f"Do NOT invent or hallucinate coordinates. Call 'weather__search_location' now."
                             )
                         else:
-                            error_msg = f"Error: Missing required arguments for tool '{canonical_tool_name}': {', '.join(missing_args)}. Please ask the user for these values."
+                            # For non-weather tools, ask the user directly instead of sending back to the LLM.
+                            # This prevents unnecessary LLM turns and ensures we only call the tool when inputs are complete.
+                            missing_list = ", ".join(missing_args)
+                            user_prompt = (
+                                f"I need the following required parameters for '{canonical_tool_name}': {missing_list}. "
+                                f"Please provide them so I can run the tool."
+                            )
+                            print(f"Validation failed: {user_prompt} (asking user directly)", flush=True)
+                            return {"role": "assistant", "content": user_prompt}
                         print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
