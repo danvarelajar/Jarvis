@@ -1061,24 +1061,6 @@ async def chat(request: ChatRequest, req: Request):
                         # If arguments aren't a mutable mapping for any reason, skip aliasing.
                         pass
                     
-                    # Special validation for booking__search_hotels: check for same checkin/checkout dates
-                    if canonical_tool_name == "booking__search_hotels":
-                        checkin = tool_call.arguments.get("checkInDate")
-                        checkout = tool_call.arguments.get("checkOutDate")
-                        if checkin and checkout and checkin == checkout:
-                            error_msg = (
-                                f"ERROR: checkInDate and checkOutDate are the SAME ('{checkin}'). They MUST be DIFFERENT dates. "
-                                f"If user says 'checkin tomorrow and checkout on 02/01/2026':\n"
-                                f"- Find 'tomorrow' in DATE CONTEXT -> use that date for checkInDate\n"
-                                f"- Find '02/01/2026' in DATE CONTEXT -> use that date for checkOutDate\n"
-                                f"- These are DIFFERENT dates. Do NOT use the same date for both.\n"
-                                f"Rebuild the tool call with DIFFERENT dates for checkInDate and checkOutDate."
-                            )
-                            print(f"Validation failed: Same checkin/checkout dates. Retrying with LLM...", flush=True)
-                            current_messages.append({"role": "assistant", "content": response_content})
-                            current_messages.append({"role": "user", "content": error_msg})
-                            continue
-                    
                     # Check for missing required args
                     missing_args = [arg for arg in required_args if arg not in tool_call.arguments or tool_call.arguments[arg] in (None, "")]
                     if missing_args:
@@ -1095,23 +1077,15 @@ async def chat(request: ChatRequest, req: Request):
                                 f"Do NOT invent or hallucinate coordinates. Call 'weather__search_location' now."
                             )
                         else:
-                            # For booking tools with missing rooms, try to fix it by defaulting to 1
-                            if canonical_tool_name == "booking__search_hotels" and "rooms" in missing_args:
-                                # Default rooms to 1 if not provided
-                                tool_call.arguments["rooms"] = 1
-                                print(f"[{get_timestamp()}] [VALIDATION] Defaulted missing 'rooms' parameter to 1", flush=True)
-                                missing_args.remove("rooms")
-                            
-                            if missing_args:
-                                # For non-weather tools, ask the user directly instead of sending back to the LLM.
-                                # This prevents unnecessary LLM turns and ensures we only call the tool when inputs are complete.
-                                missing_list = ", ".join(missing_args)
-                                user_prompt = (
-                                    f"I need the following required parameters for '{canonical_tool_name}': {missing_list}. "
-                                    f"Please provide them so I can run the tool."
-                                )
-                                print(f"Validation failed: {user_prompt} (asking user directly)", flush=True)
-                                return {"role": "assistant", "content": user_prompt}
+                            # For non-weather tools, ask the user directly instead of sending back to the LLM.
+                            # This prevents unnecessary LLM turns and ensures we only call the tool when inputs are complete.
+                            missing_list = ", ".join(missing_args)
+                            user_prompt = (
+                                f"I need the following required parameters for '{canonical_tool_name}': {missing_list}. "
+                                f"Please provide them so I can run the tool."
+                            )
+                            print(f"Validation failed: {user_prompt} (asking user directly)", flush=True)
+                            return {"role": "assistant", "content": user_prompt}
                         print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
