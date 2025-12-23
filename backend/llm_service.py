@@ -505,7 +505,7 @@ def build_structured_prompt_gemma(
     # FEW-SHOT EXAMPLES (with placeholders to prevent example leakage)
     prompt += "## EXAMPLES\n"
     if tools:
-        # Example 1: Tool call
+        # Example 1: Tool call (CORRECT format)
         example_tool = tools[0].get("name", "example_tool")
         if use_function_call_tokens:
             prompt += (
@@ -517,12 +517,19 @@ def build_structured_prompt_gemma(
                 f"User: \"@booking find hotels in <CITY>\"\n"
                 f"Assistant: {{\"tool\": \"{example_tool}\", \"arguments\": {{\"city\": \"<CITY_FROM_USER>\"}}}}\n\n"
             )
-        # Example 2: Text response
+        # Example 2: WRONG format (what NOT to do)
+        prompt += (
+            "WRONG (do NOT do this):\n"
+            "User: \"@booking create itinerary\"\n"
+            "Assistant: {\"origin\": \"MAD\", \"destination\": \"KUL\", \"dates\": {...}}\n"
+            "This is WRONG because it's missing 'tool' and 'arguments' fields.\n\n"
+        )
+        # Example 3: Text response
         prompt += (
             "User: \"Hi there\"\n"
             "Assistant: Hello! How can I help you today?\n\n"
         )
-        # Example 3: Missing parameters
+        # Example 4: Missing parameters
         prompt += (
             "If required parameters are missing, ask user directly:\n"
             "\"I need: city, checkInDate, checkOutDate. Please provide them.\"\n"
@@ -1069,6 +1076,20 @@ def parse_llm_response(response_content: str) -> dict:
 
         data = json.loads(json_str)
         
+        # Check if JSON is missing "tool" field entirely (LLM hallucinated wrong structure)
+        if "tool" not in data:
+            # This is a common error - LLM returns JSON but not in tool call format
+            error_msg = (
+                f"LLM format error: You returned JSON but it's missing the required 'tool' and 'arguments' fields. "
+                f"You returned: {json.dumps(data)[:200]}. "
+                f"You MUST use this EXACT format: {{\"tool\": \"tool_name\", \"arguments\": {{\"param\": \"value\"}}}}. "
+                f"Put ALL parameters inside the 'arguments' object. "
+                f"Do NOT return JSON like {{\"origin\": \"...\", \"destination\": \"...\"}}. "
+                f"You MUST wrap it as {{\"tool\": \"booking__create_itinerary\", \"arguments\": {{\"from\": \"...\", \"to\": \"...\"}}}}."
+            )
+            print(f"[{get_timestamp()}] [PARSE] {error_msg}", flush=True)
+            return {"type": "error", "message": error_msg}
+        
         # Check if tool call format is malformed (parameters at top level instead of in "arguments")
         if "tool" in data and "arguments" not in data:
             # Try to fix: move all non-"tool" fields into "arguments"
@@ -1082,8 +1103,9 @@ def parse_llm_response(response_content: str) -> dict:
             tool_call = ToolCall(**data)
             return {"type": "tool_call", "data": tool_call}
         except ValidationError as ve:
-            # If validation fails, try to provide helpful error
+            # If validation fails, provide helpful error
             print(f"[{get_timestamp()}] [PARSE] Tool call validation failed: {ve}", flush=True)
+            # Note: "tool" not in data case is already handled above
             if "tool" in data:
                 return {"type": "error", "message": f"Invalid tool call format. Expected {{'tool': 'name', 'arguments': {{...}}}}. Got: {json.dumps(data)[:200]}"}
             raise  # Re-raise to be caught by outer except
