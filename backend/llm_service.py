@@ -219,6 +219,26 @@ def calculate_specific_dates(user_query: str, current_date: str, today: datetime
         future_date = today + timedelta(weeks=weeks)
         specific_dates.append(f"- When the user says 'in {weeks} weeks', use: {future_date.strftime('%Y-%m-%d')}")
     
+    # Check for "until [day]" or "[day]" patterns (e.g., "until Friday", "Friday")
+    for day_name, day_num in days_of_week.items():
+        # Pattern: "until [day]" or "until [day abbreviation]" (e.g., "until Friday", "until Fri")
+        if f'until {day_name}' in user_lower or f'until {day_name[:3]}' in user_lower:
+            # Find next occurrence of this day (including today if today is that day)
+            days_ahead = (day_num - today.weekday()) % 7
+            # If today is that day (days_ahead == 0), use today; otherwise use the calculated day
+            target_day = today + timedelta(days=days_ahead)
+            specific_dates.append(f"- When the user says 'until {day_name}', use: {target_day.strftime('%Y-%m-%d')}")
+        
+        # Pattern: standalone "[day]" (e.g., "Friday", "Fri") - only if not already matched
+        # Check if day name appears as a standalone word (not part of "next", "this", "until")
+        day_pattern = r'\b' + day_name + r'\b'
+        if re.search(day_pattern, user_lower) and f'next {day_name}' not in user_lower and f'this {day_name}' not in user_lower and f'until {day_name}' not in user_lower:
+            # Find next occurrence of this day (including today if today is that day)
+            days_ahead = (day_num - today.weekday()) % 7
+            # If today is that day (days_ahead == 0), use today; otherwise use the calculated day
+            target_day = today + timedelta(days=days_ahead)
+            specific_dates.append(f"- When the user says '{day_name}', use: {target_day.strftime('%Y-%m-%d')}")
+    
     if specific_dates:
         return "\n".join(specific_dates) + "\n"
     return ""
@@ -514,7 +534,9 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                             f"2. Do NOT use synonyms (e.g., 'origin'/'destination'/'city' - use 'from'/'to')\n"
                             f"3. Do NOT add parameters that are NOT in this list (e.g., do NOT add 'city' if it's not listed)\n"
                             f"4. If a parameter is not in the list above, DO NOT include it in your tool call\n"
-                            f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n\n"
+                            f"5. Example: If the list shows 'from', 'to', 'departDate', 'returnDate', 'passengers' - use ONLY these 5 parameters, nothing else\n"
+                            f"6. **FORBIDDEN**: Do NOT add 'adults', 'guests', 'people', 'persons', or any other parameter NOT explicitly listed above\n"
+                            f"7. **STRICT ENFORCEMENT**: If you see parameters like 'city', 'checkInDate', 'checkOutDate', 'rooms' - use ONLY these. Do NOT add 'adults' or any other parameter.\n\n"
                         )
                     else:
                         tool_context += "**CRITICAL: Use EXACT parameter names from the Input Schema above. Do NOT invent or use synonyms. Do NOT add parameters that are not listed.**\n\n"
@@ -541,6 +563,9 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 day_after_str = "N/A"
                 current_year = current_date[:4] if len(current_date) >= 4 else "2024"
             
+            # Calculate specific dates from user query
+            specific_dates_context = calculate_specific_dates(user_query, current_date, today)
+            
             date_context = (
                 f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
                 f"Today's date: {current_date}\n"
@@ -549,7 +574,13 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 f"- When the user says 'today', use: {current_date}\n"
                 f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
                 f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
-                f"- When the user says 'next week', add 7 days to {current_date}\n\n"
+                f"- When the user says 'next week', add 7 days to {current_date}\n"
+            )
+            
+            if specific_dates_context:
+                date_context += f"\nSPECIFIC DATE CALCULATIONS FROM USER QUERY:\n{specific_dates_context}\n"
+            
+            date_context += (
                 f"IMPORTANT: The current year is {current_year}. "
                 f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
                 f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
@@ -582,6 +613,16 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 day_after_str = "N/A"
                 current_year = current_date[:4] if len(current_date) >= 4 else "2024"
             
+            # Get user query for date calculations
+            user_query_for_dates = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    user_query_for_dates = msg.get("content", "")
+                    break
+            
+            # Calculate specific dates from user query
+            specific_dates_context = calculate_specific_dates(user_query_for_dates, current_date, today)
+            
             date_context = (
                 f"\n## CURRENT DATE AND TIME (CRITICAL - USE THESE DATES):\n"
                 f"Today's date: {current_date}\n"
@@ -590,7 +631,13 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 f"- When the user says 'today', use: {current_date}\n"
                 f"- When the user says 'tomorrow', use: {tomorrow_str}\n"
                 f"- When the user says 'day after tomorrow' or 'after tomorrow', use: {day_after_str}\n"
-                f"- When the user says 'next week', add 7 days to {current_date}\n\n"
+                f"- When the user says 'next week', add 7 days to {current_date}\n"
+            )
+            
+            if specific_dates_context:
+                date_context += f"\nSPECIFIC DATE CALCULATIONS FROM USER QUERY:\n{specific_dates_context}\n"
+            
+            date_context += (
                 f"IMPORTANT: The current year is {current_year}. "
                 f"DO NOT use dates from 2023 or earlier. Always calculate relative dates from TODAY ({current_date}). "
                 f"Example: If today is {current_date} and user says 'tomorrow', use {tomorrow_str}, NOT 2023-10-04.\n\n"
