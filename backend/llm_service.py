@@ -1236,8 +1236,8 @@ def parse_llm_response(response_content: str) -> dict:
         
         # Validate with Pydantic
         try:
-        tool_call = ToolCall(**data)
-        return {"type": "tool_call", "data": tool_call}
+            tool_call = ToolCall(**data)
+            return {"type": "tool_call", "data": tool_call}
         except ValidationError as ve:
             # If validation fails, provide helpful error
             print(f"[{get_timestamp()}] [PARSE] Tool call validation failed: {ve}", flush=True)
