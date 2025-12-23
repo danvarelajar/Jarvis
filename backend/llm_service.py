@@ -546,6 +546,16 @@ def build_structured_prompt_gemma(
             "CRITICAL: Convert ALL dates to YYYY-MM-DD format before calling booking tools.\n"
             "Use the DATE CONTEXT section above to find the correct YYYY-MM-DD format for dates mentioned by the user.\n"
         )
+        prompt += "\n### ROOMS PARAMETER (for booking__search_hotels):\n"
+        prompt += (
+            "The 'rooms' parameter is REQUIRED for booking__search_hotels.\n"
+            "Extract rooms from the user query:\n"
+            "- If user says '1 room' or '1 rooms', use rooms: 1\n"
+            "- If user says '2 rooms' or '2 room', use rooms: 2\n"
+            "- If user says 'for 3 rooms', use rooms: 3\n"
+            "- If rooms is NOT mentioned in the query, use rooms: 1 (default to 1)\n"
+            "CRITICAL: Always include 'rooms' parameter in your tool call. It is REQUIRED.\n"
+        )
         prompt += "\n### PASSENGERS PARAMETER:\n"
         prompt += (
             "For booking__search_flights and booking__create_itinerary, the 'passengers' parameter is REQUIRED.\n"
