@@ -878,6 +878,7 @@ async def chat(request: ChatRequest, req: Request):
                     input_schema = tool_def.get('inputSchema', {})
                     required_args = input_schema.get('required', [])
                     allowed_args = input_schema.get('properties', {}).keys()
+                    properties_schema = input_schema.get('properties', {})
                     
                     # Compatibility: some lab tools have evolved arg names over time.
                     # If the schema requires one but the model provided the other, auto-alias to the required name.
@@ -944,6 +945,28 @@ async def chat(request: ChatRequest, req: Request):
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
                         continue
+
+                    # Coerce numeric strings to numbers based on schema (avoids server-side type errors like rooms must be integer)
+                    try:
+                        for arg_name, arg_schema in properties_schema.items():
+                            if arg_name not in tool_call.arguments:
+                                continue
+                            arg_type = arg_schema.get("type")
+                            val = tool_call.arguments[arg_name]
+                            if isinstance(val, str):
+                                if arg_type == "integer":
+                                    try:
+                                        if val.strip().isdigit() or (val.strip().startswith("-") and val.strip()[1:].isdigit()):
+                                            tool_call.arguments[arg_name] = int(val)
+                                    except Exception:
+                                        pass
+                                elif arg_type == "number":
+                                    try:
+                                        tool_call.arguments[arg_name] = float(val)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
 
                 if not server_to_call:
                     if canonical_tool_name == "execute_shell_command":
