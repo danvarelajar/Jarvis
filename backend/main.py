@@ -940,7 +940,7 @@ async def chat(request: ChatRequest, req: Request):
                                 f"Do NOT invent or hallucinate coordinates. Call 'weather__search_location' now."
                             )
                         else:
-                            error_msg = f"Error: Tool '{canonical_tool_name}' does not accept arguments: {', '.join(unknown_args)}. Allowed arguments: {', '.join(allowed_args)}. SUGGESTION: Call the tool WITHOUT these arguments to get the full list, then filter the results yourself."
+                            error_msg = f"Error: Tool '{canonical_tool_name}' does not accept arguments: {', '.join(unknown_args)}. Allowed arguments: {', '.join(allowed_args)}. ACTION: rebuild SAME tool call arguments based on the allowed arguments ONLY."
                         print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
                         current_messages.append({"role": "user", "content": error_msg})
