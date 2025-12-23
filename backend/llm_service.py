@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timedelta
 import subprocess
 import time
+import asyncio
 
 def get_timestamp() -> str:
     """Returns a formatted timestamp for logging."""
@@ -877,11 +878,44 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             http_start = time.time()
             print(f"[{get_timestamp()}] [LLM] HTTP POST request initiated...")
             print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
-            response = await client.post(api_endpoint, json=payload)
-            http_time = time.time() - http_start
-            print(f"[{get_timestamp()}] [LLM] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
+            
+            # Retry logic for 404 errors (model might not be loaded yet)
+            max_retries = 2  # Initial attempt + 1 retry
+            retry_count = 0
+            response = None
+            
+            while retry_count < max_retries:
+                try:
+                    response = await client.post(api_endpoint, json=payload)
+                    http_time = time.time() - http_start
+                    print(f"[{get_timestamp()}] [LLM] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
+                    
+                    # If 404, retry after 5 seconds
+                    if response.status_code == 404:
+                        if retry_count < max_retries - 1:
+                            retry_count += 1
+                            print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404 error, retrying in 5 seconds (attempt {retry_count + 1}/{max_retries})...")
+                            await asyncio.sleep(5)
+                            http_start = time.time()  # Reset timer for retry
+                            continue
+                        else:
+                            # Last attempt failed
+                            response.raise_for_status()
+                    else:
+                        # Success or other error - break out of retry loop
+                        break
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404 and retry_count < max_retries - 1:
+                        retry_count += 1
+                        print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404 error, retrying in 5 seconds (attempt {retry_count + 1}/{max_retries})...")
+                        await asyncio.sleep(5)
+                        http_start = time.time()  # Reset timer for retry
+                        continue
+                    else:
+                        raise
             
             # Performance analysis
+            http_time = time.time() - http_start
             if http_time > 60:
                 print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s - model may be loading from disk or underpowered")
             elif http_time > 30:
