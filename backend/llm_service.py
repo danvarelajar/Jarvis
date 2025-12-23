@@ -541,10 +541,12 @@ def build_structured_prompt_gemma(
     prompt += "2. Use the EXACT date from DATE CONTEXT - do NOT calculate or guess dates yourself.\n"
     prompt += "3. If the user says 'checkout on 02/01/2026', find '02/01/2026' in DATE CONTEXT and use the YYYY-MM-DD format shown there.\n"
     prompt += "4. Do NOT add days to other dates - use the ACTUAL parsed date from DATE CONTEXT.\n"
-    prompt += "5. Example: If user says 'checkin tomorrow and checkout on 02/01/2026':\n"
-    prompt += "   - Find 'tomorrow' in DATE CONTEXT -> use that YYYY-MM-DD date for checkInDate\n"
-    prompt += "   - Find '02/01/2026' in DATE CONTEXT -> use that YYYY-MM-DD date for checkOutDate\n"
-    prompt += "   - Do NOT calculate checkout as checkin + 1 day\n"
+    prompt += "5. CRITICAL: checkInDate and checkOutDate MUST be DIFFERENT dates. If they're the same, you made an error.\n"
+    prompt += "6. Example: If user says 'checkin tomorrow and checkout on 02/01/2026':\n"
+    prompt += "   - Find 'tomorrow' in DATE CONTEXT -> use that YYYY-MM-DD date for checkInDate (e.g., '2026-01-02')\n"
+    prompt += "   - Find '02/01/2026' in DATE CONTEXT -> use that YYYY-MM-DD date for checkOutDate (e.g., '2026-02-01')\n"
+    prompt += "   - These are DIFFERENT dates - do NOT use the same date for both\n"
+    prompt += "   - Do NOT calculate checkout as checkin + 1 day - use the ACTUAL date from DATE CONTEXT\n"
     prompt += "\n"
     
     # DATE FORMAT REQUIREMENT (for booking tools)
@@ -562,15 +564,18 @@ def build_structured_prompt_gemma(
             "CRITICAL: Convert ALL dates to YYYY-MM-DD format before calling booking tools.\n"
             "Use the DATE CONTEXT section above to find the correct YYYY-MM-DD format for dates mentioned by the user.\n"
         )
-        prompt += "\n### ROOMS PARAMETER (for booking__search_hotels):\n"
+        prompt += "\n### ROOMS PARAMETER (for booking__search_hotels - REQUIRED):\n"
         prompt += (
-            "The 'rooms' parameter is REQUIRED for booking__search_hotels.\n"
+            "The 'rooms' parameter is REQUIRED for booking__search_hotels. You MUST include it in EVERY tool call.\n"
             "Extract rooms from the user query:\n"
             "- If user says '1 room' or '1 rooms', use rooms: 1\n"
             "- If user says '2 rooms' or '2 room', use rooms: 2\n"
             "- If user says 'for 3 rooms', use rooms: 3\n"
+            "- If user says 'one room', use rooms: 1\n"
+            "- If user says 'two rooms', use rooms: 2\n"
             "- If rooms is NOT mentioned in the query, use rooms: 1 (default to 1)\n"
-            "CRITICAL: Always include 'rooms' parameter in your tool call. It is REQUIRED.\n"
+            "CRITICAL: Always include 'rooms' parameter in your tool call. It is REQUIRED. Do NOT forget it.\n"
+            "Example: If user says '1 room', you MUST include \"rooms\": 1 in your arguments.\n"
         )
         prompt += "\n### PASSENGERS PARAMETER:\n"
         prompt += (
