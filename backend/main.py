@@ -625,6 +625,9 @@ async def chat(request: ChatRequest, req: Request):
     
     # Track if we're in loop detection mode (tools removed due to repeated tool calls)
     loop_detected = False
+    # Weather flow state is now guided by prompt; keep placeholders to avoid runtime errors
+    weather_flow_state = None
+    weather_coordinates = None
     
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
