@@ -722,10 +722,21 @@ async def chat(request: ChatRequest, req: Request):
                     "content": (
                         "CRITICAL: Use ONLY booking__create_itinerary and call the tool NOW. "
                         "Output JSON only, no text. Do NOT wrap JSON in code blocks (no ```json or ```).\n"
-                        f"User request: '{user_message}'. Extract ORIGIN, DESTINATION, DATES and PASSENGER COUNT from THIS request only.\n"
-                        "IMPORTANT: For dates, use the DATE CONTEXT section in the system prompt to convert relative dates (e.g., '26th December', '07/01/2026') to absolute dates (YYYY-MM-DD format).\n"
-                        "Example (use placeholders, then REPLACE with values from the user): "
-                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>, \"city\": \"<CITY_FROM_USER>\"}}"
+                        f"User request: '{user_message}'. Extract FROM, TO, DATES, PASSENGERS, ROOMS, CITY from THIS request only.\n"
+                        "CRITICAL PARAMETER EXTRACTION:\n"
+                        "- FROM: Extract departure city (e.g., 'Madrid' -> 'Madrid').\n"
+                        "- TO: Extract destination city (e.g., 'Rome' -> 'Rome').\n"
+                        "- CITY: Usually same as TO (destination city for hotel).\n"
+                        "- PASSENGERS: '2 passengers' -> passengers: 2. If not mentioned, use 1.\n"
+                        "- ROOMS: '1 room' -> rooms: 1. '2 rooms' -> rooms: 2. If not mentioned, use 1.\n"
+                        "CRITICAL DATE EXTRACTION:\n"
+                        "- Find dates in DATE CONTEXT section. If user says '1st January', find '1st january' in DATE CONTEXT.\n"
+                        "- If user says '7th January', find '7th january' in DATE CONTEXT.\n"
+                        "- Use ONLY dates from DATE CONTEXT - do NOT use '2025-12-26' or any date not in DATE CONTEXT.\n"
+                        "- departDate and returnDate MUST be DIFFERENT dates.\n"
+                        "REQUIRED parameters: from, to, departDate, returnDate, passengers, rooms, city, checkInDate, checkOutDate.\n"
+                        "Example format (REPLACE placeholders with ACTUAL values from user query and DATE CONTEXT): "
+                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"from\": \"<EXTRACT_FROM>\", \"to\": \"<EXTRACT_TO>\", \"departDate\": \"<FROM_DATE_CONTEXT>\", \"returnDate\": \"<FROM_DATE_CONTEXT>\", \"passengers\": <EXTRACT_PASSENGERS>, \"rooms\": <EXTRACT_ROOMS>, \"city\": \"<EXTRACT_CITY>\", \"checkInDate\": \"<FROM_DATE_CONTEXT>\", \"checkOutDate\": \"<FROM_DATE_CONTEXT>\"}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
