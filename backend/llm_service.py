@@ -594,7 +594,8 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             else:
                 qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: Tools are available because the user used @server_name. After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
             
-            print(f"[{get_timestamp()}] PROMPT: {ollama_system_prompt}")
+            # Debug: log the Qwen RAG system prompt for troubleshooting
+            print(f"[{get_timestamp()}] PROMPT: {qwen_system_prompt}")
             return await query_ollama(messages, qwen_system_prompt, model_url, model_name=model_name)
         else:
             # Legacy Ollama approach
