@@ -913,12 +913,16 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
     
     # Dispatch based on provider
     if provider == "ollama":
-        if use_qwen_rag and tools:
+        # Check if we should use structured prompt approach (for Gemma models)
+        # Use structured prompt if: (1) use_qwen_rag is True, OR (2) model name suggests Gemma
+        use_structured_approach = use_qwen_rag or ("gemma" in model_name.lower() or "mcp" in model_name.lower())
+        
+        if use_structured_approach:
             # Structured prompt approach with Gemma control tokens:
-            # 1. Retrieve relevant tools using RAG
+            # 1. Retrieve relevant tools using RAG (if tools available)
             # 2. Build date context
             # 3. Build structured prompt with Gemma control tokens
-            # 4. Send to LLM
+            # 4. Send to LLM using /api/generate
             
             # Get user query from last message
             user_query_for_rag = user_query
@@ -928,11 +932,13 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                         user_query_for_rag = msg.get("content", "")
                         break
             
-            # Retrieve top-k relevant tools
-            relevant_tools = retrieve_relevant_tools(user_query_for_rag, tools, top_k=5)
-            
-            # Use all tools if RAG found nothing (fallback)
-            tools_to_use = relevant_tools if relevant_tools else (tools if tools else [])
+            # Retrieve top-k relevant tools (if tools are available)
+            if tools:
+                relevant_tools = retrieve_relevant_tools(user_query_for_rag, tools, top_k=5)
+                # Use all tools if RAG found nothing (fallback)
+                tools_to_use = relevant_tools if relevant_tools else tools
+            else:
+                tools_to_use = []
             
             # Get current date for context (vulnerable to command injection in naive mode)
             current_date, current_datetime = get_current_date(agent_mode)
