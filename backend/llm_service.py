@@ -239,6 +239,59 @@ def calculate_specific_dates(user_query: str, current_date: str, today: datetime
             target_day = today + timedelta(days=days_ahead)
             specific_dates.append(f"- When the user says '{day_name}', use: {target_day.strftime('%Y-%m-%d')}")
     
+    # Parse explicit date formats: "26th December", "26 December", "December 26"
+    months = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+    }
+    
+    # Pattern: "26th December" or "26 December" or "December 26"
+    for month_name, month_num in months.items():
+        # "26th December" or "26 December"
+        pattern1 = re.search(r'(\d+)(?:st|nd|rd|th)?\s+' + month_name, user_lower)
+        if pattern1:
+            day = int(pattern1.group(1))
+            year = today.year
+            # If the date is in the past this year, assume next year
+            try:
+                parsed_date = datetime(year, month_num, day)
+                if parsed_date < today:
+                    year += 1
+                    parsed_date = datetime(year, month_num, day)
+                specific_dates.append(f"- When the user says '{pattern1.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')}")
+            except ValueError:
+                pass  # Invalid date (e.g., Feb 30)
+        
+        # "December 26" or "December 26th"
+        pattern2 = re.search(month_name + r'\s+(\d+)(?:st|nd|rd|th)?', user_lower)
+        if pattern2:
+            day = int(pattern2.group(1))
+            year = today.year
+            try:
+                parsed_date = datetime(year, month_num, day)
+                if parsed_date < today:
+                    year += 1
+                    parsed_date = datetime(year, month_num, day)
+                specific_dates.append(f"- When the user says '{pattern2.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')}")
+            except ValueError:
+                pass
+    
+    # Parse DD/MM/YYYY or MM/DD/YYYY format: "07/01/2026"
+    date_pattern = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', user_query)  # Use original case for exact match
+    if date_pattern:
+        part1, part2, year = int(date_pattern.group(1)), int(date_pattern.group(2)), int(date_pattern.group(3))
+        # Try DD/MM/YYYY first (more common internationally)
+        try:
+            parsed_date = datetime(year, part2, part1)
+            specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')} (DD/MM/YYYY format)")
+        except ValueError:
+            # Try MM/DD/YYYY if DD/MM fails
+            try:
+                parsed_date = datetime(year, part1, part2)
+                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {parsed_date.strftime('%Y-%m-%d')} (MM/DD/YYYY format)")
+            except ValueError:
+                pass
+    
     if specific_dates:
         return "\n".join(specific_dates) + "\n"
     return ""
@@ -424,9 +477,12 @@ def build_structured_prompt_gemma(
         )
         prompt += "\n"
     
-    # DATE CONTEXT
-    prompt += "## DATE CONTEXT\n"
+    # DATE CONTEXT (CRITICAL - placed prominently before examples)
+    prompt += "## DATE CONTEXT (CRITICAL - USE THESE EXACT DATES)\n"
     prompt += date_context
+    prompt += "\n"
+    prompt += "IMPORTANT: When you see dates in the user query, match them to the SPECIFIC DATES listed above.\n"
+    prompt += "Example: If user says '07/01/2026' and above shows '2026-01-07', use '2026-01-07'.\n"
     prompt += "\n"
     
     # FEW-SHOT EXAMPLES (with placeholders to prevent example leakage)

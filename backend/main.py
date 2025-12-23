@@ -648,12 +648,13 @@ async def chat(request: ChatRequest, req: Request):
         if has_booking_tools and "@booking" in user_message.lower():
             msg_low = user_message.lower()
             intent = None
-            if any(k in msg_low for k in ["hotel", "hotels", "stay", "room"]):
+            # Check for itinerary FIRST (most specific, often includes "room" or "hotel" keywords)
+            if any(k in msg_low for k in ["itinerary", "plan trip", "full trip", "complete trip", "create itinerary", "create a itinerary"]):
+                intent = "itinerary"
+            elif any(k in msg_low for k in ["hotel", "hotels", "stay", "room"]):
                 intent = "hotels"
             elif any(k in msg_low for k in ["flight", "flights", "fly", "airline"]):
                 intent = "flights"
-            elif any(k in msg_low for k in ["itinerary", "plan trip", "full trip", "complete trip"]):
-                intent = "itinerary"
             if not intent:
                 clarification = (
                     "I can help with booking. Please specify one of: "
@@ -699,8 +700,9 @@ async def chat(request: ChatRequest, req: Request):
                         "CRITICAL: Use ONLY booking__create_itinerary and call the tool NOW. "
                         "Output JSON only, no text.\n"
                         f"User request: '{user_message}'. Extract ORIGIN, DESTINATION, DATES and PASSENGER COUNT from THIS request only.\n"
+                        "IMPORTANT: For dates, use the DATE CONTEXT section in the system prompt to convert relative dates (e.g., '26th December', '07/01/2026') to absolute dates (YYYY-MM-DD format).\n"
                         "Example (use placeholders, then REPLACE with values from the user): "
-                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}"
+                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>, \"rooms\": <ROOMS_FROM_USER>, \"city\": \"<CITY_FROM_USER>\"}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
