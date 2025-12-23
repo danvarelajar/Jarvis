@@ -594,6 +594,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             else:
                 qwen_system_prompt = f"{MCP_ROUTER_SYSTEM_PROMPT}\n{date_context}\n{tool_context}\n\nIMPORTANT: Tools are available because the user used @server_name. After you receive tool results, if you have enough information to answer the user, return a TEXT response (not JSON). Only call tools if you still need more information."
             
+            print(f"[{get_timestamp()}] PROMPT: {ollama_system_prompt}")
             return await query_ollama(messages, qwen_system_prompt, model_url, model_name=model_name)
         else:
             # Legacy Ollama approach
@@ -663,7 +664,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
             
-            print(f"[{get_timestamp()}] PROMPT: {ollama_system_prompt}")
             return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
 
     # Construct the full prompt including system instructions (for OpenAI)
