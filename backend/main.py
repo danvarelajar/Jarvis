@@ -820,6 +820,8 @@ async def chat(request: ChatRequest, req: Request):
             return {"role": "assistant", "content": parsed_response["message"]}
             
         elif parsed_response["type"] == "tool_call":
+            # Reset format error counter on successful tool call parsing
+            format_error_retries = 0
             tool_call = parsed_response["data"]
             
             # Resolve tool name case-insensitively against discovered tools.
