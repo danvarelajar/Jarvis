@@ -472,7 +472,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # 1. Fixed system prompt (MCP_ROUTER_SYSTEM_PROMPT)
             # 2. Retrieve relevant tools using RAG
             # 3. Build context with retrieved tools
-            # 4. Send to Qwen
+            # 4. Send to LLM
             
             # Get user query from last message
             user_query = ""
@@ -663,6 +663,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
             
+            print(f"[{get_timestamp()}] PROMPT: {ollama_system_prompt}")
             return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
 
     # Construct the full prompt including system instructions (for OpenAI)
