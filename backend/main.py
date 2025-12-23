@@ -629,6 +629,10 @@ async def chat(request: ChatRequest, req: Request):
     # Weather flow state placeholders (prompt now guides, but keep locals to avoid reference errors)
     weather_flow_state = None
     weather_coordinates = None
+    
+    # Track format error retries to prevent infinite loops
+    format_error_retries = 0
+    MAX_FORMAT_ERROR_RETRIES = 3
 
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
@@ -751,6 +755,8 @@ async def chat(request: ChatRequest, req: Request):
         print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
         
         if parsed_response["type"] == "text":
+            # Reset format error counter on successful text response
+            format_error_retries = 0
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
             print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
@@ -759,20 +765,56 @@ async def chat(request: ChatRequest, req: Request):
         elif parsed_response["type"] == "error":
             # If tools are available, give the model one more chance with a strict format reminder
             if tools_to_send:
+                format_error_retries += 1
+                if format_error_retries > MAX_FORMAT_ERROR_RETRIES:
+                    # Give up after max retries - return error to user
+                    error_msg = (
+                        f"I'm having trouble understanding the tool call format. "
+                        f"After {MAX_FORMAT_ERROR_RETRIES} attempts, I couldn't generate a valid tool call. "
+                        f"Please try rephrasing your request or contact support if this persists."
+                    )
+                    print(f"[{get_timestamp()}] [ERROR] Format error retry limit ({MAX_FORMAT_ERROR_RETRIES}) exceeded. Returning error to user.", flush=True)
+                    return {"role": "assistant", "content": error_msg}
+                
                 available_names = [t.get("name", "unknown") for t in tools_to_send]
                 available_list = ", ".join([f"'{name}'" for name in available_names])
+                
+                # Provide concrete example based on the tool being called
+                example_tool = available_names[0] if available_names else "example_tool"
+                if "create_itinerary" in example_tool:
+                    concrete_example = (
+                        '{"tool": "booking__create_itinerary", "arguments": {"from": "Madrid", "to": "Kuala Lumpur", '
+                        '"departDate": "2025-12-26", "returnDate": "2026-01-07", "passengers": 2, "rooms": 2, "city": "Kuala Lumpur"}}'
+                    )
+                elif "search_hotels" in example_tool:
+                    concrete_example = (
+                        '{"tool": "booking__search_hotels", "arguments": {"city": "Madrid", '
+                        '"checkInDate": "2025-12-26", "checkOutDate": "2026-01-07", "rooms": 1}}'
+                    )
+                elif "search_flights" in example_tool:
+                    concrete_example = (
+                        '{"tool": "booking__search_flights", "arguments": {"from": "Madrid", "to": "Kuala Lumpur", '
+                        '"departDate": "2025-12-26", "returnDate": "2026-01-07"}}'
+                    )
+                else:
+                    concrete_example = f'{{"tool": "{example_tool}", "arguments": {{"param": "value"}}}}'
+                
                 tool_format_hint = (
-                    "FORMAT ERROR: You must output a tool call in this exact JSON format: "
-                    "{\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}. "
-                    "Use ONLY one of these tool names: "
-                    f"{available_list}. "
-                    "All parameters must be inside the 'arguments' object. "
-                    "Do NOT return schemas or unrelated JSON. "
-                    "Example (booking__search_hotels): "
-                    "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Talavera de la Reina\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                    f"🚨 CRITICAL FORMAT ERROR (Attempt {format_error_retries}/{MAX_FORMAT_ERROR_RETRIES}): "
+                    f"You returned JSON but it's missing 'tool' and 'arguments' fields. "
+                    f"You MUST use this EXACT format:\n\n"
+                    f"{concrete_example}\n\n"
+                    f"CRITICAL RULES:\n"
+                    f"1. Start with {{\"tool\": \"{example_tool}\", \"arguments\": {{...}}}}\n"
+                    f"2. Put ALL parameters inside the 'arguments' object\n"
+                    f"3. Do NOT return JSON like {{\"origin\": \"...\", \"destination\": \"...\"}}\n"
+                    f"4. Do NOT wrap JSON in code blocks (no ```json or ```)\n"
+                    f"5. Output raw JSON only\n\n"
+                    f"Copy this format exactly and replace the values with the user's request."
                 )
                 current_messages.append({"role": "assistant", "content": response_content})
                 current_messages.append({"role": "user", "content": tool_format_hint})
+                print(f"[{get_timestamp()}] [RETRY] Format error retry {format_error_retries}/{MAX_FORMAT_ERROR_RETRIES}", flush=True)
                 continue  # Retry with strict instruction
             print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
             return {"role": "assistant", "content": parsed_response["message"]}
