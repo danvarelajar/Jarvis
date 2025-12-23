@@ -303,12 +303,28 @@ def calculate_specific_dates(user_query: str, current_date: str, today: datetime
             pass
         
         # Prefer the format that gives a future date (or closer to today if both are valid)
+        # For checkout dates, prefer MM/DD/YYYY (more common in US/booking contexts)
         if dd_mm_yyyy_valid and mm_dd_yyyy_valid:
-            # Both valid - prefer the one closer to today (likely what user meant)
-            if abs((dd_mm_date - today).days) < abs((mm_dd_date - today).days):
-                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
+            # Both valid - check if this looks like a checkout date (after "checkout" or "check-out")
+            is_checkout_date = "checkout" in user_lower or "check-out" in user_lower
+            if is_checkout_date:
+                # For checkout dates, prefer MM/DD/YYYY (Feb 1, 2026) over DD/MM/YYYY (Jan 2, 2026)
+                # unless DD/MM makes more sense (much closer to today)
+                days_diff_dd_mm = abs((dd_mm_date - today).days)
+                days_diff_mm_dd = abs((mm_dd_date - today).days)
+                # If MM/DD is within reasonable range (not too far), prefer it for checkout
+                if mm_dd_date > today and days_diff_mm_dd < 60:
+                    specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY - checkout date)")
+                elif days_diff_dd_mm < days_diff_mm_dd:
+                    specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
+                else:
+                    specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY)")
             else:
-                specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY)")
+                # Not a checkout date - prefer the one closer to today
+                if abs((dd_mm_date - today).days) < abs((mm_dd_date - today).days):
+                    specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
+                else:
+                    specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {mm_dd_date.strftime('%Y-%m-%d')} (interpreted as MM/DD/YYYY)")
         elif dd_mm_yyyy_valid:
             specific_dates.append(f"- When the user says '{date_pattern.group(0)}', use: {dd_mm_date.strftime('%Y-%m-%d')} (interpreted as DD/MM/YYYY)")
         elif mm_dd_yyyy_valid:
