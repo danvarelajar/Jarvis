@@ -468,6 +468,7 @@ def build_structured_prompt_gemma(
             "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
             "6. If no tools available, respond with TEXT only (no function calls).\n"
             "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
+            "8. Do NOT wrap JSON in code blocks (no ```json or ```). Output raw JSON only.\n"
         )
     else:
         prompt += (
@@ -478,6 +479,7 @@ def build_structured_prompt_gemma(
             "5. If examples show 'Madrid' or 'Paris', REPLACE with values from user's current request.\n"
             "6. If no tools available, respond with TEXT only (no JSON).\n"
             "7. Do NOT add unlisted parameters (e.g., adults, guests, people).\n"
+            "8. Do NOT wrap JSON in code blocks (no ```json or ```). Output raw JSON only.\n"
         )
     prompt += "\n"
     
@@ -1024,30 +1026,45 @@ def parse_llm_response(response_content: str) -> dict:
         # Attempt to find JSON object using regex
         import re
         
+        # First, clean markdown code blocks if present
+        clean_content = response_content.strip()
+        if clean_content.startswith("```json"):
+            clean_content = clean_content[7:].strip()
+        elif clean_content.startswith("```"):
+            clean_content = clean_content[3:].strip()
+        if clean_content.endswith("```"):
+            clean_content = clean_content[:-3].strip()
+        
         # Check for <start_function_call> format (gemma3-mcp model)
-        function_call_match = re.search(r'<start_function_call>(.*?)<end_function_call>', response_content, re.DOTALL)
+        function_call_match = re.search(r'<start_function_call>(.*?)<end_function_call>', clean_content, re.DOTALL)
         if function_call_match:
             json_str = function_call_match.group(1).strip()
             print(f"[{get_timestamp()}] [PARSE] Detected <start_function_call> format", flush=True)
         else:
             # Look for a JSON object structure: { ... }
-            # This regex is simple and might need refinement for nested braces, 
-            # but for simple tool calls it usually works.
-            # We look for the first '{' and the last '}'
-            match = re.search(r'(\{.*\})', response_content.replace('\n', ' '), re.DOTALL)
-            
-            json_str = ""
-            if match:
-                json_str = match.group(1)
+            # Use a more robust regex that handles nested braces
+            # First try to find JSON object boundaries
+            brace_start = clean_content.find('{')
+            if brace_start != -1:
+                # Find matching closing brace by counting braces
+                brace_count = 0
+                brace_end = brace_start
+                for i in range(brace_start, len(clean_content)):
+                    if clean_content[i] == '{':
+                        brace_count += 1
+                    elif clean_content[i] == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            brace_end = i + 1
+                            break
+                if brace_count == 0:
+                    json_str = clean_content[brace_start:brace_end]
+                else:
+                    # Fallback: use regex
+                    content_for_regex = clean_content.replace('\n', ' ')
+                    match = re.search(r'(\{.*\})', content_for_regex, re.DOTALL)
+                    json_str = match.group(1) if match else clean_content.strip()
             else:
-                # Fallback: try cleaning markdown code blocks
-                clean_content = response_content.strip()
-                if clean_content.startswith("```json"):
-                    clean_content = clean_content[7:]
-                if clean_content.startswith("```"):
-                    clean_content = clean_content[3:]
-                if clean_content.endswith("```"):
-                    clean_content = clean_content[:-3]
                 json_str = clean_content.strip()
 
         data = json.loads(json_str)

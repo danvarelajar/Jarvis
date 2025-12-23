@@ -698,7 +698,7 @@ async def chat(request: ChatRequest, req: Request):
                     "role": "user",
                     "content": (
                         "CRITICAL: Use ONLY booking__create_itinerary and call the tool NOW. "
-                        "Output JSON only, no text.\n"
+                        "Output JSON only, no text. Do NOT wrap JSON in code blocks (no ```json or ```).\n"
                         f"User request: '{user_message}'. Extract ORIGIN, DESTINATION, DATES and PASSENGER COUNT from THIS request only.\n"
                         "IMPORTANT: For dates, use the DATE CONTEXT section in the system prompt to convert relative dates (e.g., '26th December', '07/01/2026') to absolute dates (YYYY-MM-DD format).\n"
                         "Example (use placeholders, then REPLACE with values from the user): "
