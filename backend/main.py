@@ -776,6 +776,24 @@ async def chat(request: ChatRequest, req: Request):
                     print(f"[{get_timestamp()}] [ERROR] Format error retry limit ({MAX_FORMAT_ERROR_RETRIES}) exceeded. Returning error to user.", flush=True)
                     return {"role": "assistant", "content": error_msg}
                 
+                # Clear previous error messages to prevent conversation bloat
+                # Keep only: original user message + most recent error correction
+                # This helps small models focus on the current instruction
+                if format_error_retries > 1:
+                    # Remove previous error correction messages (keep only original user request)
+                    # Find the original user message (first user message)
+                    original_user_idx = None
+                    for i, msg in enumerate(current_messages):
+                        if msg.get("role") == "user" and "@booking" in msg.get("content", ""):
+                            original_user_idx = i
+                            break
+                    
+                    if original_user_idx is not None:
+                        # Keep only messages up to and including the original user message
+                        # Then add the new error correction
+                        current_messages = current_messages[:original_user_idx + 1]
+                        print(f"[{get_timestamp()}] [RETRY] Cleared previous error messages to reduce prompt length", flush=True)
+                
                 available_names = [t.get("name", "unknown") for t in tools_to_send]
                 available_list = ", ".join([f"'{name}'" for name in available_names])
                 
@@ -799,20 +817,34 @@ async def chat(request: ChatRequest, req: Request):
                 else:
                     concrete_example = f'{{"tool": "{example_tool}", "arguments": {{"param": "value"}}}}'
                 
-                tool_format_hint = (
-                    f"🚨 CRITICAL FORMAT ERROR (Attempt {format_error_retries}/{MAX_FORMAT_ERROR_RETRIES}): "
-                    f"You returned JSON but it's missing 'tool' and 'arguments' fields. "
-                    f"You MUST use this EXACT format:\n\n"
-                    f"{concrete_example}\n\n"
-                    f"CRITICAL RULES:\n"
-                    f"1. Start with {{\"tool\": \"{example_tool}\", \"arguments\": {{...}}}}\n"
-                    f"2. Put ALL parameters inside the 'arguments' object\n"
-                    f"3. Do NOT return JSON like {{\"origin\": \"...\", \"destination\": \"...\"}}\n"
-                    f"4. Do NOT wrap JSON in code blocks (no ```json or ```)\n"
-                    f"5. Output raw JSON only\n\n"
-                    f"Copy this format exactly and replace the values with the user's request."
-                )
-                current_messages.append({"role": "assistant", "content": response_content})
+                # For small models, use shorter, more direct error messages
+                # Don't append the wrong response - it confuses the model
+                if format_error_retries == 1:
+                    # First retry: Simple, direct instruction
+                    tool_format_hint = (
+                        f"ERROR: Wrong format. Use: {concrete_example}\n"
+                        f"Copy this EXACTLY and replace values from user request."
+                    )
+                elif format_error_retries == 2:
+                    # Second retry: More explicit
+                    tool_format_hint = (
+                        f"STOP using {{\"ORIGIN\": ...}} format. That is WRONG.\n"
+                        f"Use THIS format: {concrete_example}\n"
+                        f"Copy it exactly. Put ALL parameters inside 'arguments'."
+                    )
+                else:
+                    # Third retry: Very explicit with step-by-step
+                    tool_format_hint = (
+                        f"FINAL ATTEMPT: You MUST output this EXACT format:\n"
+                        f"{concrete_example}\n"
+                        f"1. Start with {{\"tool\": \"{example_tool}\", \"arguments\": {{...}}}}\n"
+                        f"2. Put ALL parameters inside 'arguments'\n"
+                        f"3. Do NOT use {{\"ORIGIN\": ...}} or {{\"DESTINATION\": ...}}\n"
+                        f"4. Copy the format above and replace values."
+                    )
+                
+                # DO NOT append the wrong response - it teaches the model the wrong pattern
+                # Just append the error correction
                 current_messages.append({"role": "user", "content": tool_format_hint})
                 print(f"[{get_timestamp()}] [RETRY] Format error retry {format_error_retries}/{MAX_FORMAT_ERROR_RETRIES}", flush=True)
                 continue  # Retry with strict instruction
