@@ -671,8 +671,10 @@ async def chat(request: ChatRequest, req: Request):
                     "role": "user",
                     "content": (
                         "CRITICAL: Use ONLY booking__search_hotels and call the tool NOW. "
-                        "Output JSON only, no text. Example: "
-                        "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Madrid\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                        "Output JSON only, no text.\n"
+                        f"User request: '{user_message}'. Extract the CITY and DATES from THIS request only (not from earlier conversation).\n"
+                        "Example (use placeholders, then REPLACE with values from the user): "
+                        "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"<CITY_FROM_USER>\", \"checkInDate\": \"<START_DATE_FROM_USER>\", \"checkOutDate\": \"<END_DATE_FROM_USER>\", \"rooms\": <ROOMS_FROM_USER_OR_ASK>}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=hotels; exposing booking__search_hotels only.", flush=True)
@@ -682,8 +684,10 @@ async def chat(request: ChatRequest, req: Request):
                     "role": "user",
                     "content": (
                         "CRITICAL: Use ONLY booking__search_flights and call the tool NOW. "
-                        "Output JSON only, no text. Example: "
-                        "{\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"MAD\", \"to\": \"CDG\", \"departDate\": \"YYYY-MM-DD\"}}"
+                        "Output JSON only, no text.\n"
+                        f"User request: '{user_message}'. Extract FROM, TO and DATES from THIS request only.\n"
+                        "Example (use placeholders, then REPLACE with values from the user): "
+                        "{\"tool\": \"booking__search_flights\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER_IF_NEEDED>\"}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=flights; exposing booking__search_flights only.", flush=True)
@@ -693,8 +697,10 @@ async def chat(request: ChatRequest, req: Request):
                     "role": "user",
                     "content": (
                         "CRITICAL: Use ONLY booking__create_itinerary and call the tool NOW. "
-                        "Output JSON only, no text. Example: "
-                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"origin\": \"Madrid\", \"destination\": \"Paris\", \"departDate\": \"YYYY-MM-DD\", \"returnDate\": \"YYYY-MM-DD\"}}"
+                        "Output JSON only, no text.\n"
+                        f"User request: '{user_message}'. Extract ORIGIN, DESTINATION, DATES and PASSENGER COUNT from THIS request only.\n"
+                        "Example (use placeholders, then REPLACE with values from the user): "
+                        "{\"tool\": \"booking__create_itinerary\", \"arguments\": {\"from\": \"<FROM_CITY_FROM_USER>\", \"to\": \"<TO_CITY_FROM_USER>\", \"departDate\": \"<DEPART_DATE_FROM_USER>\", \"returnDate\": \"<RETURN_DATE_FROM_USER>\", \"passengers\": <PASSENGERS_FROM_USER>}}"
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
