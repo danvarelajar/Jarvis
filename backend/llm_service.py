@@ -806,7 +806,7 @@ def parse_llm_response(response_content: str) -> dict:
         # If it's not valid JSON or doesn't match the schema, treat as text
         # But if it looks like it tried to be JSON (starts with {), return error
         if response_content.strip().startswith("{") or "```json" in response_content:
-            error_msg = "System Error: Failed to parse tool call. Expected format: {\"tool\": \"tool_name\", \"arguments\": {...}}. All parameters must be inside the 'arguments' object."
+            error_msg = "LLM format error: expected tool call JSON like {\"tool\": \"tool_name\", \"arguments\": {...}}. Put ALL parameters inside the 'arguments' object."
             print(f"[{get_timestamp()}] [PARSE] {error_msg}", flush=True)
             return {"type": "error", "message": error_msg}
         
