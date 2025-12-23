@@ -733,6 +733,23 @@ async def chat(request: ChatRequest, req: Request):
             return {"role": "assistant", "content": parsed_response["content"]}
             
         elif parsed_response["type"] == "error":
+            # If tools are available, give the model one more chance with a strict format reminder
+            if tools_to_send:
+                available_names = [t.get("name", "unknown") for t in tools_to_send]
+                available_list = ", ".join([f"'{name}'" for name in available_names])
+                tool_format_hint = (
+                    "FORMAT ERROR: You must output a tool call in this exact JSON format: "
+                    "{\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}. "
+                    "Use ONLY one of these tool names: "
+                    f"{available_list}. "
+                    "All parameters must be inside the 'arguments' object. "
+                    "Do NOT return schemas or unrelated JSON. "
+                    "Example (booking__search_hotels): "
+                    "{\"tool\": \"booking__search_hotels\", \"arguments\": {\"city\": \"Talavera de la Reina\", \"checkInDate\": \"YYYY-MM-DD\", \"checkOutDate\": \"YYYY-MM-DD\", \"rooms\": 1}}"
+                )
+                current_messages.append({"role": "assistant", "content": response_content})
+                current_messages.append({"role": "user", "content": tool_format_hint})
+                continue  # Retry with strict instruction
             print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
             return {"role": "assistant", "content": parsed_response["message"]}
             
