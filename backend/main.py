@@ -85,12 +85,18 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     api_key = None
     if provider == "openai":
         api_key = connection_manager.openai_api_key
+    # Get model name from connection_manager (ensure it's loaded from config)
+    model_name = connection_manager.ollama_model_name
+    if not model_name or model_name.strip() == "":
+        model_name = "qwen3:8b"
+        print(f"[{get_timestamp()}] [WARNING] Model name was empty in MCP sampling, using default: '{model_name}'")
+    print(f"[{get_timestamp()}] [MCP_SAMPLING] Using Ollama model: {model_name}")
     response_text = await query_llm(
         messages, 
         api_key=api_key, 
         provider=provider, 
         model_url=connection_manager.ollama_url,
-        model_name=getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+        model_name=model_name
     )
     
     # Construct result
@@ -129,7 +135,7 @@ async def get_config():
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url,
-        "ollamaModelName": getattr(connection_manager, "ollama_model_name", "qwen3:8b"),
+        "ollamaModelName": connection_manager.ollama_model_name,
         "agentMode": getattr(connection_manager, "agent_mode", "defender")
     }
     for server_key, conn in connection_manager.connections.items():
@@ -172,9 +178,10 @@ async def update_config(request: ConfigRequest):
         candidate = request.ollamaModelName.strip()
         print(f"[{get_timestamp()}] [DEBUG] Received ollamaModelName in request: '{request.ollamaModelName}' (after strip: '{candidate}')")
         if candidate:
-            old_model = connection_manager.ollama_model_name
+            old_model = getattr(connection_manager, "ollama_model_name", None) or "qwen3:8b"
             connection_manager.ollama_model_name = candidate
             print(f"[{get_timestamp()}] [DEBUG] Updated Ollama model name: '{old_model}' -> '{candidate}'")
+            print(f"[{get_timestamp()}] [DEBUG] connection_manager.ollama_model_name is now: '{connection_manager.ollama_model_name}'")
         else:
             print(f"[{get_timestamp()}] [DEBUG] Skipped updating model name (empty after strip)")
     
@@ -218,7 +225,7 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
         return {"error": "Ollama URL is not configured"}
     
     # Use provided model name or fall back to configured model
-    model = model_name or getattr(connection_manager, "ollama_model_name", "qwen3:8b")
+    model = model_name or connection_manager.ollama_model_name or "qwen3:8b"
     
     # Ensure URL doesn't have /api/chat suffix
     base_url = url
@@ -746,8 +753,12 @@ async def chat(request: ChatRequest, req: Request):
         use_qwen_rag = (connection_manager.llm_provider == "ollama")
         
         # Get the model name (ensure it's loaded from config)
-        model_name = getattr(connection_manager, "ollama_model_name", "qwen3:8b")
-        print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: {model_name}")
+        # Read directly from connection_manager attribute (should be set after load_config)
+        model_name = connection_manager.ollama_model_name
+        print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: '{model_name}' (provider: {connection_manager.llm_provider})")
+        if not model_name or model_name.strip() == "":
+            model_name = "qwen3:8b"
+            print(f"[{get_timestamp()}] [WARNING] Model name was empty, using default: '{model_name}'")
         
         # In naive mode, allow prompt injection by not filtering user input
         # VULNERABILITY: User input is passed directly without sanitization

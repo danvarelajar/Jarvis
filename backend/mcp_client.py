@@ -415,14 +415,15 @@ class GlobalConnectionManager:
                     llm_config = json.load(f)
                     self.llm_provider = llm_config.get("llmProvider", "openai")
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
+                    old_model = getattr(self, "ollama_model_name", None)
                     self.ollama_model_name = llm_config.get("ollamaModelName", "qwen3:8b")
                     self.agent_mode = llm_config.get("agentMode", "defender")
-                print(f"Loaded LLM config from {LLM_CONFIG_FILE}")
-                print(f"[{get_timestamp()}] [DEBUG] Loaded ollama_model_name: {self.ollama_model_name}")
+                print(f"[{get_timestamp()}] [CONFIG] Loaded LLM config from {LLM_CONFIG_FILE}")
+                print(f"[{get_timestamp()}] [CONFIG] Loaded ollama_model_name: '{self.ollama_model_name}' (was: '{old_model}')")
             except Exception as e:
-                print(f"Failed to load LLM config: {e}")
+                print(f"[{get_timestamp()}] [CONFIG] Failed to load LLM config: {e}")
         else:
-            print(f"[{get_timestamp()}] [Jarvis] LLM config not found at {LLM_CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [CONFIG] LLM config not found at {LLM_CONFIG_FILE}, using defaults")
 
 
         # Load secrets
@@ -507,9 +508,10 @@ class GlobalConnectionManager:
         try:
             with open(LLM_CONFIG_FILE, 'w') as f:
                 json.dump(llm_config, f, indent=2)
-            print(f"Saved LLM config to {LLM_CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [CONFIG] Saved LLM config to {LLM_CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [CONFIG] Saved ollamaModelName: '{self.ollama_model_name}'")
         except Exception as e:
-            print(f"Failed to save LLM config: {e}")
+            print(f"[{get_timestamp()}] [CONFIG] Failed to save LLM config: {e}")
 
     async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
         # Normalize to lowercase to prevent duplicates
