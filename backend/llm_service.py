@@ -576,10 +576,33 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)}, HTTP wait: {format_duration(http_start)})")
             
             # /api/chat returns message.content
+            # Log full response structure for debugging
+            print(f"[{get_timestamp()}] [LLM] Response keys: {list(result.keys())}")
+            if "message" in result:
+                print(f"[{get_timestamp()}] [LLM] Message keys: {list(result['message'].keys()) if isinstance(result.get('message'), dict) else 'not a dict'}")
+            
             response_content = result.get("message", {}).get("content", "")
+            
+            # If content is empty, check for alternative response formats
+            if not response_content:
+                # Check if response is directly in result
+                if "response" in result:
+                    response_content = result.get("response", "")
+                    print(f"[{get_timestamp()}] [LLM] Found response in 'response' field: {len(response_content)} chars")
+                # Check if done field indicates completion
+                if "done" in result and result.get("done") is True and not response_content:
+                    print(f"[{get_timestamp()}] [LLM] WARNING: Response marked as done but content is empty")
+                    # Log full result for debugging
+                    import json as json_module
+                    print(f"[{get_timestamp()}] [LLM] Full response structure: {json_module.dumps(result, indent=2)[:500]}")
             
             if response_content:
                 print(f"[{get_timestamp()}] [LLM] Response content length: {len(response_content)} chars")
+            else:
+                print(f"[{get_timestamp()}] [LLM] WARNING: Response content is empty!")
+                # Log full result for debugging
+                import json as json_module
+                print(f"[{get_timestamp()}] [LLM] Full response: {json_module.dumps(result, indent=2)[:1000]}")
             
             return response_content
     except httpx.HTTPStatusError as e:
@@ -794,6 +817,13 @@ def parse_llm_response(response_content: str) -> dict:
     Returns a dict with 'type': 'tool_call' or 'text', and relevant data.
     """
     print(f"[{get_timestamp()}] DEBUG: Raw LLM Response: {repr(response_content)}")
+    
+    # Handle empty responses
+    if not response_content or not response_content.strip():
+        error_msg = "LLM returned an empty response. The model may not have generated any output. Please try again or check the model configuration."
+        print(f"[{get_timestamp()}] [PARSE] ERROR: {error_msg}", flush=True)
+        return {"type": "error", "message": error_msg}
+    
     try:
         # Attempt to find JSON object using regex
         import re
