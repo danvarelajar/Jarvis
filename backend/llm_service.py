@@ -433,9 +433,10 @@ def build_structured_prompt_gemma(
     model_name: str = ""
 ) -> str:
     """
-    Builds a structured system prompt using Gemma control tokens for optimal parsing by small models.
+    Builds a structured system prompt using appropriate control tokens for optimal parsing by small models.
+    Supports both Gemma (<start_of_turn>) and Qwen (<|im_start|>) formats.
     
-    Structure:
+    Structure (Gemma):
     <start_of_turn>developer
     [SYSTEM ROLE]
     [TOOL REGISTRY]
@@ -444,17 +445,33 @@ def build_structured_prompt_gemma(
     [FEW-SHOT EXAMPLES]
     <end_of_turn>
     
+    Structure (Qwen):
+    <|im_start|>system
+    [SYSTEM ROLE]
+    [TOOL REGISTRY]
+    [SAFETY RULES]
+    [DATE CONTEXT]
+    [FEW-SHOT EXAMPLES]
+    <|im_end|>
+    
     Args:
         tools: List of tool definitions
         date_context: Pre-calculated date context string
         agent_mode: 'defender' (safe) or 'naive' (vulnerable for training)
         user_query: Current user query (for context-aware examples)
+        model_name: Model name to determine which format to use
     
     Returns:
-        Structured system prompt with Gemma control tokens
+        Structured system prompt with appropriate control tokens
     """
-    # Start developer turn
-    prompt = "<start_of_turn>developer\n"
+    # Detect model type to use correct format
+    is_qwen = "qwen" in model_name.lower()
+    
+    # Start system prompt with appropriate tokens
+    if is_qwen:
+        prompt = "<|im_start|>system\n"
+    else:
+        prompt = "<start_of_turn>developer\n"
     
     # SYSTEM ROLE
     prompt += "You are an MCP router and tool caller.\n"
@@ -711,28 +728,36 @@ def build_structured_prompt_gemma(
             "Example: '@weather what's the weather in Madrid?'\n\n"
         )
     
-    # End developer turn
-    prompt += "<end_of_turn>\n"
+    # End system prompt with appropriate tokens
+    if is_qwen:
+        prompt += "<|im_end|>\n"
+    else:
+        prompt += "<end_of_turn>\n"
     
     return prompt
 
-def convert_messages_to_prompt(messages: list, system_prompt: str) -> str:
+def convert_messages_to_prompt(messages: list, system_prompt: str, model_name: str = "") -> str:
     """
-    Convert messages array to single prompt string with Gemma control tokens.
+    Convert messages array to single prompt string with appropriate control tokens.
+    Supports both Gemma (<start_of_turn>) and Qwen (<|im_start|>) formats.
     
     Args:
         messages: List of message dicts with 'role' and 'content'
-        system_prompt: System prompt (already contains Gemma tokens if use_structured=True)
+        system_prompt: System prompt (already contains control tokens if use_structured=True)
+        model_name: Model name to determine which format to use
     
     Returns:
-        Single prompt string with all messages formatted with Gemma tokens
+        Single prompt string with all messages formatted with appropriate tokens
     """
+    # Detect model type to use correct format
+    is_qwen = "qwen" in model_name.lower()
+    
     prompt_parts = []
     
-    # System prompt (already has Gemma tokens if use_structured=True)
+    # System prompt (already has control tokens if use_structured=True)
     prompt_parts.append(system_prompt)
     
-    # Convert messages to prompt format with Gemma tokens
+    # Convert messages to prompt format with appropriate tokens
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content", "")
@@ -741,16 +766,25 @@ def convert_messages_to_prompt(messages: list, system_prompt: str) -> str:
             # System prompt already handled above, skip duplicate
             continue
         elif role == "user":
-            prompt_parts.append(f"<start_of_turn>user\n{content}<end_of_turn>")
+            if is_qwen:
+                prompt_parts.append(f"<|im_start|>user\n{content}<|im_end|>")
+            else:
+                prompt_parts.append(f"<start_of_turn>user\n{content}<end_of_turn>")
         elif role == "assistant" or role == "model":
-            prompt_parts.append(f"<start_of_turn>model\n{content}<end_of_turn>")
+            if is_qwen:
+                prompt_parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
+            else:
+                prompt_parts.append(f"<start_of_turn>model\n{content}<end_of_turn>")
     
     # Add final turn marker for LLM to respond
-    prompt_parts.append("<start_of_turn>model\n")
+    if is_qwen:
+        prompt_parts.append("<|im_start|>assistant\n")
+    else:
+        prompt_parts.append("<start_of_turn>model\n")
     
     return "\n".join(prompt_parts)
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b", use_structured: bool = False, use_generate: bool = True) -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b", use_structured: bool = False, use_generate: bool = False) -> str:
     """
     Queries a local Ollama instance.
     
@@ -759,12 +793,17 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         system_prompt: System prompt to use (or structured prompt if use_structured=True)
         model_url: Ollama server URL
         model_name: Model name to use (e.g., qwen3:8b, gemma3:1B, etc.)
-        use_structured: If True, system_prompt already contains Gemma control tokens
+        use_structured: If True, system_prompt already contains control tokens (Gemma or Qwen format)
         use_generate: If True, use /api/generate endpoint (single prompt string), else use /api/chat (messages array)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
         
+    # Enforce: structured prompts are only valid with /api/generate
+    if use_structured and not use_generate:
+        print(f"[{get_timestamp()}] [WARN] use_structured=True is not supported with /api/chat. Falling back to non-structured format.")
+        use_structured = False
+
     # Determine endpoint based on use_generate flag
     if use_generate:
         # Use /api/generate endpoint
@@ -785,15 +824,17 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             
     print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
     if use_structured:
-        print(f"[{get_timestamp()}] DEBUG: Using structured prompt with Gemma control tokens")
+        is_qwen = "qwen" in model_name.lower()
+        format_type = "Qwen ChatML" if is_qwen else "Gemma"
+        print(f"[{get_timestamp()}] DEBUG: Using structured prompt with {format_type} control tokens")
     if use_generate:
         print(f"[{get_timestamp()}] DEBUG: Using /api/generate endpoint")
     else:
-        print(f"[{get_timestamp()}] DEBUG: Using /api/chat endpoint (legacy)")
+        print(f"[{get_timestamp()}] DEBUG: Using /api/chat endpoint")
     
     if use_generate:
         # Convert messages to single prompt string
-        full_prompt = convert_messages_to_prompt(messages, system_prompt)
+        full_prompt = convert_messages_to_prompt(messages, system_prompt, model_name=model_name)
         print(f"[{get_timestamp()}] DEBUG: Full prompt length: {len(full_prompt)} chars")
         
         payload = {
@@ -806,13 +847,35 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             }
         }
     else:
-        # Legacy /api/chat format
-        ollama_messages = [{"role": "system", "content": system_prompt}]
+        # /api/chat format - Ollama applies chat template automatically, so we use plain messages
+        # If use_structured=True, we need to strip control tokens from system_prompt
+        if use_structured:
+            # Strip control tokens from structured prompt for /api/chat
+            # Remove Gemma tokens: <start_of_turn>developer\n and <end_of_turn>\n
+            # Remove Qwen tokens: <|im_start|>system\n and <|im_end|>\n
+            plain_system_prompt = system_prompt
+            # Remove Gemma tokens
+            plain_system_prompt = plain_system_prompt.replace("<start_of_turn>developer\n", "")
+            plain_system_prompt = plain_system_prompt.replace("<end_of_turn>\n", "")
+            # Remove Qwen tokens
+            plain_system_prompt = plain_system_prompt.replace("<|im_start|>system\n", "")
+            plain_system_prompt = plain_system_prompt.replace("<|im_end|>\n", "")
+            # Clean up any extra newlines
+            plain_system_prompt = plain_system_prompt.strip()
+            
+            ollama_messages = [{"role": "system", "content": plain_system_prompt}]
+        else:
+            ollama_messages = [{"role": "system", "content": system_prompt}]
         
+        # Add user and assistant messages (plain format, no control tokens)
         for msg in messages:
             # Map roles if necessary, but "user" and "assistant" are standard
             role = msg["role"]
-            if role == "model": role = "assistant" # Gemini uses 'model', Ollama uses 'assistant'
+            if role == "system":
+                # System prompt already handled above, skip duplicate
+                continue
+            if role == "model": 
+                role = "assistant"  # Gemini uses 'model', Ollama uses 'assistant'
             ollama_messages.append({"role": role, "content": msg["content"]})
         
         payload = {
@@ -820,8 +883,9 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             "messages": ollama_messages,
             "stream": False,
             "keep_alive": "10m",  # Keep model loaded for 10 minutes after last use (prevents reloading from disk)
-        "options": {
-            "temperature": 0 # Low temp for tool execution
+            "options": {
+                "temperature": 0 # Low temp for tool execution
+            }
         }
     }
     
@@ -979,16 +1043,20 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
     
     # Dispatch based on provider
     if provider == "ollama":
-        # Check if we should use structured prompt approach (for Gemma models)
-        # Use structured prompt if: (1) use_qwen_rag is True, OR (2) model name suggests Gemma
-        use_structured_approach = use_qwen_rag or ("gemma" in model_name.lower() or "mcp" in model_name.lower())
+        # Check if we should use structured prompt approach (for Gemma or Qwen models)
+        # Use structured prompt if: (1) use_qwen_rag is True, OR (2) model name suggests Gemma/Qwen
+        use_structured_approach = use_qwen_rag or ("gemma" in model_name.lower() or "mcp" in model_name.lower() or "qwen" in model_name.lower())
+        # Structured prompts require /api/generate. If we're using /api/chat, disable structured.
+        if use_structured_approach:
+            print(f"[{get_timestamp()}] [INFO] Structured prompts are disabled because /api/chat is in use. Using non-structured prompt.")
+            use_structured_approach = False
         
         if use_structured_approach:
-            # Structured prompt approach with Gemma control tokens:
+            # Structured prompt approach with model-specific control tokens (Gemma or Qwen):
             # 1. Retrieve relevant tools using RAG (if tools available)
             # 2. Build date context
-            # 3. Build structured prompt with Gemma control tokens
-            # 4. Send to LLM using /api/generate
+            # 3. Build structured prompt with appropriate control tokens (Gemma: <start_of_turn>, Qwen: <|im_start|>)
+            # 4. Send to LLM using /api/chat
             
             # Get user query from last message
             user_query_for_rag = user_query
@@ -1056,7 +1124,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             # Debug: log prompt length
             print(f"[{get_timestamp()}] [PROMPT] Structured prompt length: {len(structured_prompt)} chars")
             
-            return await query_ollama(messages, structured_prompt, model_url, model_name=model_name, use_structured=True, use_generate=True)
+            return await query_ollama(messages, structured_prompt, model_url, model_name=model_name, use_structured=True, use_generate=False)
         else:
             # Legacy Ollama approach
             # Get current date for context (vulnerable to command injection in naive mode)
