@@ -88,8 +88,48 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     # Get model name from connection_manager (ensure it's loaded from config)
     model_name = connection_manager.ollama_model_name
     if not model_name or model_name.strip() == "":
-        model_name = "qwen3:8b"
-        print(f"[{get_timestamp()}] [WARNING] Model name was empty in MCP sampling, using default: '{model_name}'")
+        # Fetch available models and use the first one
+        import httpx
+        try:
+            base_url = connection_manager.ollama_url
+            if base_url.endswith("/api/chat"):
+                base_url = base_url[:-9]
+            if base_url.endswith("/"):
+                base_url = base_url[:-1]
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                response = await client.get(f"{base_url}/api/tags")
+                if response.status_code == 200:
+                    result = response.json()
+                    if "models" in result and len(result["models"]) > 0:
+                        # Get first model and normalize name
+                        first_model = result["models"][0].get("name", "")
+                        if ":" in first_model:
+                            parts = first_model.split(":")
+                            if len(parts) >= 2:
+                                first_model = ":".join(parts[:2])
+                        model_name = first_model
+                        print(f"[{get_timestamp()}] [MCP_SAMPLING] No model configured, using first available: '{model_name}'")
+                    else:
+                        return types.CreateMessageResult(
+                            role="assistant",
+                            content=types.TextContent(type="text", text="Error: No models available in Ollama. Please configure a model."),
+                            model="error",
+                            stopReason="error"
+                        )
+                else:
+                    return types.CreateMessageResult(
+                        role="assistant",
+                        content=types.TextContent(type="text", text=f"Error: Could not fetch models from Ollama (status: {response.status_code})"),
+                        model="error",
+                        stopReason="error"
+                    )
+        except Exception as e:
+            return types.CreateMessageResult(
+                role="assistant",
+                content=types.TextContent(type="text", text=f"Error: Could not fetch available models: {str(e)}"),
+                model="error",
+                stopReason="error"
+            )
     print(f"[{get_timestamp()}] [MCP_SAMPLING] Using Ollama model: {model_name}")
     response_text = await query_llm(
         messages, 
@@ -178,7 +218,7 @@ async def update_config(request: ConfigRequest):
         candidate = request.ollamaModelName.strip()
         print(f"[{get_timestamp()}] [DEBUG] Received ollamaModelName in request: '{request.ollamaModelName}' (after strip: '{candidate}')")
         if candidate:
-            old_model = getattr(connection_manager, "ollama_model_name", None) or "qwen3:8b"
+            old_model = getattr(connection_manager, "ollama_model_name", None) or ""
             connection_manager.ollama_model_name = candidate
             print(f"[{get_timestamp()}] [DEBUG] Updated Ollama model name: '{old_model}' -> '{candidate}'")
             print(f"[{get_timestamp()}] [DEBUG] connection_manager.ollama_model_name is now: '{connection_manager.ollama_model_name}'")
@@ -225,7 +265,7 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
         return {"error": "Ollama URL is not configured"}
     
     # Use provided model name or fall back to configured model
-    model = model_name or connection_manager.ollama_model_name or "qwen3:8b"
+    model = model_name or connection_manager.ollama_model_name or ""
     
     # Ensure URL doesn't have /api/chat suffix
     base_url = url
@@ -757,8 +797,33 @@ async def chat(request: ChatRequest, req: Request):
         model_name = connection_manager.ollama_model_name
         print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: '{model_name}' (provider: {connection_manager.llm_provider})")
         if not model_name or model_name.strip() == "":
-            model_name = "qwen3:8b"
-            print(f"[{get_timestamp()}] [WARNING] Model name was empty, using default: '{model_name}'")
+            # Fetch available models and use the first one
+            import httpx
+            try:
+                base_url = connection_manager.ollama_url
+                if base_url.endswith("/api/chat"):
+                    base_url = base_url[:-9]
+                if base_url.endswith("/"):
+                    base_url = base_url[:-1]
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    response = await client.get(f"{base_url}/api/tags")
+                    if response.status_code == 200:
+                        result = response.json()
+                        if "models" in result and len(result["models"]) > 0:
+                            # Get first model and normalize name
+                            first_model = result["models"][0].get("name", "")
+                            if ":" in first_model:
+                                parts = first_model.split(":")
+                                if len(parts) >= 2:
+                                    first_model = ":".join(parts[:2])
+                            model_name = first_model
+                            print(f"[{get_timestamp()}] [WARNING] No model configured, using first available: '{model_name}'")
+                        else:
+                            return {"role": "assistant", "content": "Error: No models available in Ollama. Please configure a model in the settings."}
+                    else:
+                        return {"role": "assistant", "content": f"Error: Could not fetch models from Ollama (status: {response.status_code})"}
+            except Exception as e:
+                return {"role": "assistant", "content": f"Error: Could not fetch available models: {str(e)}"}
         
         # In naive mode, allow prompt injection by not filtering user input
         # VULNERABILITY: User input is passed directly without sanitization

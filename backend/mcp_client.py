@@ -304,7 +304,7 @@ class GlobalConnectionManager:
         self.openai_api_key: Optional[str] = None
         self.llm_provider: str = "openai" # openai or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
-        self.ollama_model_name: str = "qwen3:8b"  # Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
+        self.ollama_model_name: str = ""  # Model name for Ollama (loaded from config or fetched from Ollama)
         # Lab alignment: controls how aggressively the agent exposes tools and follows untrusted text.
         # - defender: least-privilege tool exposure + safer tool-output framing
         # - naive: intentionally permissive to demonstrate failures
@@ -416,7 +416,7 @@ class GlobalConnectionManager:
                     self.llm_provider = llm_config.get("llmProvider", "openai")
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
                     old_model = getattr(self, "ollama_model_name", None)
-                    self.ollama_model_name = llm_config.get("ollamaModelName", "qwen3:8b")
+                    self.ollama_model_name = llm_config.get("ollamaModelName", "")
                     self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"[{get_timestamp()}] [CONFIG] Loaded LLM config from {LLM_CONFIG_FILE}")
                 print(f"[{get_timestamp()}] [CONFIG] Loaded ollama_model_name: '{self.ollama_model_name}' (was: '{old_model}')")

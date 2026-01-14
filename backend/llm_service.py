@@ -423,7 +423,7 @@ def format_tool_registry(tools: List[dict]) -> str:
 
     return "\n".join(registry)
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "qwen3:8b") -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "") -> str:
     """
     Queries a local Ollama instance.
     
@@ -435,6 +435,9 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     """
     if not model_url:
         return "Error: Ollama URL is not set."
+    
+    if not model_name or model_name.strip() == "":
+        return "Error: Model name is not set. Please select a model in the settings."
         
     # Use /api/chat endpoint. Ollama applies the model's chat template internally.
     api_endpoint = model_url
@@ -593,7 +596,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "qwen3:8b", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
     """
     Queries the selected LLM provider.
     
