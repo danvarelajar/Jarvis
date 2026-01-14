@@ -802,17 +802,25 @@ async def chat(request: ChatRequest, req: Request):
                 intent = "hotels"
             elif any(k in msg_low for k in ["flight", "flights", "fly", "airline"]):
                 intent = "flights"
+            elif any(k in msg_low for k in ["refund", "cancel", "cancellation", "return", "reimburse"]):
+                intent = "refund"
             if not intent:
-                clarification = (
-                    "I can help with booking. Please specify one of: "
-                    "1) search hotels, 2) search flights, 3) create itinerary.\n"
-                    "Examples:\n"
-                    "- Hotels: '@booking find hotels in Madrid for Jan 10-12'\n"
-                    "- Flights: '@booking find flights from Madrid to Paris on Jan 10'\n"
-                    "- Itinerary: '@booking create itinerary Madrid to Paris Jan 10-15 with hotel and flights'"
-                )
-                print(f"[{get_timestamp()}] [BOOKING] Intent unclear, asking user to clarify.", flush=True)
-                return {"role": "assistant", "content": clarification}
+                # Check if user is asking a question (explain, how, what, etc.) - don't filter tools, let LLM handle it
+                if any(k in msg_low for k in ["explain", "how", "what", "tell me", "describe", "information", "info"]):
+                    print(f"[{get_timestamp()}] [BOOKING] Question detected, not filtering tools - letting LLM handle with all tools available", flush=True)
+                    # Don't filter tools, let the LLM use appropriate tools based on the question
+                else:
+                    clarification = (
+                        "I can help with booking. Please specify one of: "
+                        "1) search hotels, 2) search flights, 3) create itinerary, 4) refund/cancel booking.\n"
+                        "Examples:\n"
+                        "- Hotels: '@booking find hotels in Madrid for Jan 10-12'\n"
+                        "- Flights: '@booking find flights from Madrid to Paris on Jan 10'\n"
+                        "- Itinerary: '@booking create itinerary Madrid to Paris Jan 10-15 with hotel and flights'\n"
+                        "- Refund: '@booking refund my booking' or '@booking explain how to request a refund'"
+                    )
+                    print(f"[{get_timestamp()}] [BOOKING] Intent unclear, asking user to clarify.", flush=True)
+                    return {"role": "assistant", "content": clarification}
             if intent == "hotels":
                 tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__search_hotels"]
                 current_messages.append({
@@ -882,6 +890,25 @@ async def chat(request: ChatRequest, req: Request):
                     )
                 })
                 print(f"[{get_timestamp()}] [BOOKING] Routing intent=itinerary; exposing booking__create_itinerary only.", flush=True)
+            elif intent == "refund":
+                # For refund intent, check if it's an informational question or an action request
+                if any(k in msg_low for k in ["explain", "how", "what", "tell me", "describe", "information", "info", "can i", "how do"]):
+                    # Informational question - don't filter tools, let LLM answer naturally
+                    print(f"[{get_timestamp()}] [BOOKING] Routing intent=refund (informational); keeping all tools available for LLM to answer", flush=True)
+                else:
+                    # Action request - filter to refund tool only
+                    tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__refund_booking"]
+                    current_messages.append({
+                        "role": "user",
+                        "content": (
+                            "CRITICAL: Use ONLY booking__refund_booking and call the tool NOW. "
+                            "Output JSON only, no text.\n"
+                            f"User request: '{user_message}'. Extract booking ID or reference from THIS request.\n"
+                            "REQUIRED parameters: Check the tool schema for required parameters.\n"
+                            "Example format: {\"tool\": \"booking__refund_booking\", \"arguments\": {...}}"
+                        )
+                    })
+                    print(f"[{get_timestamp()}] [BOOKING] Routing intent=refund (action); exposing booking__refund_booking only.", flush=True)
         
         # Query LLM
         # Enable Qwen RAG approach when using Ollama provider
