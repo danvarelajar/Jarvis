@@ -704,13 +704,16 @@ async def chat(request: ChatRequest, req: Request):
         
         # Handle weather flow selection state - check if last assistant message was asking for location selection
         # This handles the case where user is responding to a location selection request from previous turn
+        selection_processed = False
         if not weather_flow_state or weather_flow_state == "need_selection":
+            print(f"[{get_timestamp()}] [WEATHER_FLOW] Checking for location selection (weather_flow_state: {weather_flow_state})", flush=True)
             # Check conversation history for location selection request
             for msg in reversed(current_messages):
                 if msg.get("role") == "assistant":
                     content = msg.get("content", "")
                     # Check if this message contains location selection request
                     if "locations matching your search" in content or "Please specify which location" in content:
+                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Found location selection request in assistant message", flush=True)
                         # Ensure weather tools are loaded if we're processing a selection
                         # This is important because the user's selection response (e.g., "1") may not include @weather prefix
                         # but we need weather tools to continue the flow
@@ -749,37 +752,64 @@ async def chat(request: ChatRequest, req: Request):
                                 print(f"[{get_timestamp()}] [WEATHER_FLOW] Error loading weather tools: {e}", flush=True)
                                 import traceback
                                 traceback.print_exc()
-                        # Try to extract location data from the message or from tool results
-                        # Look for tool results in previous messages
+                        # Try to extract location data from multiple sources:
+                        # 1. Tool results in previous messages
+                        # 2. Assistant message that contains the formatted location list
+                        locations_list = None
+                        result_data = None
+                        
+                        # First, try to find tool result in message history
                         for prev_msg in reversed(current_messages):
                             if prev_msg.get("role") == "user" and "Tool Result:" in prev_msg.get("content", ""):
                                 try:
                                     import json
-                                    tool_result_text = prev_msg.get("content", "").split("Tool Result:")[-1].split("\n\n")[0].strip()
-                                    result_data = json.loads(tool_result_text) if isinstance(tool_result_text, str) else tool_result_text
+                                    # Extract tool result - handle different formats
+                                    content = prev_msg.get("content", "")
+                                    tool_result_text = content.split("Tool Result:")[-1]
+                                    # Remove any CRITICAL instructions that might follow
+                                    if "CRITICAL:" in tool_result_text:
+                                        tool_result_text = tool_result_text.split("CRITICAL:")[0]
+                                    if "🚨" in tool_result_text:
+                                        tool_result_text = tool_result_text.split("🚨")[0]
+                                    tool_result_text = tool_result_text.strip()
+                                    
+                                    # Try to parse as JSON
+                                    if tool_result_text.startswith("[") or tool_result_text.startswith("{"):
+                                        result_data = json.loads(tool_result_text)
+                                    else:
+                                        # Might be a string representation, try to parse
+                                        result_data = json.loads(tool_result_text) if tool_result_text else None
                                     
                                     if isinstance(result_data, list) and len(result_data) > 1:
-                                        # Parse locations from result
-                                        locations_list = []
-                                        for idx, loc in enumerate(result_data, 1):
-                                            if isinstance(loc, dict):
-                                                name = loc.get("name") or loc.get("location") or loc.get("city") or "Unknown"
-                                                country = loc.get("country") or loc.get("countryCode") or ""
-                                                state = loc.get("state") or loc.get("region") or ""
-                                                lat = loc.get("latitude") or loc.get("lat")
-                                                lon = loc.get("longitude") or loc.get("lon") or loc.get("lng")
-                                                
-                                                locations_list.append({
-                                                    "index": idx,
-                                                    "name": name,
-                                                    "state": state,
-                                                    "country": country,
-                                                    "latitude": lat,
-                                                    "longitude": lon,
-                                                    "full_data": loc
-                                                })
-                                        
-                                        if locations_list:
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Found tool result with {len(result_data)} locations in message history", flush=True)
+                                        break
+                                except Exception as e:
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing tool result from message: {e}", flush=True)
+                                    continue
+                        
+                        # If we found result_data, parse it into locations_list
+                        if result_data and isinstance(result_data, list) and len(result_data) > 1:
+                            # Parse locations from result
+                            locations_list = []
+                            for idx, loc in enumerate(result_data, 1):
+                                if isinstance(loc, dict):
+                                    name = loc.get("name") or loc.get("location") or loc.get("city") or "Unknown"
+                                    country = loc.get("country") or loc.get("countryCode") or ""
+                                    state = loc.get("state") or loc.get("region") or ""
+                                    lat = loc.get("latitude") or loc.get("lat")
+                                    lon = loc.get("longitude") or loc.get("lon") or loc.get("lng")
+                                    
+                                    locations_list.append({
+                                        "index": idx,
+                                        "name": name,
+                                        "state": state,
+                                        "country": country,
+                                        "latitude": lat,
+                                        "longitude": lon,
+                                        "full_data": loc
+                                    })
+                            
+                            if locations_list:
                                             # Try to parse user's selection
                                             user_lower = user_message.lower()
                                             selected_location = None
@@ -809,7 +839,10 @@ async def chat(request: ChatRequest, req: Request):
                                                 if lat is not None and lon is not None:
                                                     weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
                                                     weather_flow_state = "need_forecast"
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Selection processed, coordinates: {weather_coordinates}, proceeding to forecast", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Selection processed successfully!", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Selected location: {selected_location.get('name')} (index {selected_location.get('index')})", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Coordinates: lat={lat}, lon={lon}", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] State updated to: need_forecast", flush=True)
                                                     
                                                     # Add explicit instruction to LLM to call get_complete_forecast with selected coordinates
                                                     location_display = selected_location.get('name', 'Unknown')
@@ -827,9 +860,11 @@ async def chat(request: ChatRequest, req: Request):
                                                         f"Do NOT output any text before or after the JSON. Do NOT wrap it in code blocks. Just the raw JSON."
                                                     )
                                                     current_messages.append({"role": "user", "content": selection_instruction})
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Added instruction to call get_complete_forecast with coordinates: lat={lat}, lon={lon}", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Added instruction message to call get_complete_forecast", flush=True)
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Instruction preview: {selection_instruction[:150]}...", flush=True)
                                                     
-                                                    # Continue to tool call logic - tools should be available
+                                                    # Mark selection as processed and break out of all loops to continue to LLM query
+                                                    selection_processed = True
                                                     break
                                                 else:
                                                     return {"role": "assistant", "content": f"Error: Selected location '{selected_location.get('name')}' does not have valid coordinates. Please try another location."}
@@ -844,7 +879,9 @@ async def chat(request: ChatRequest, req: Request):
                                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing selection: {e}", flush=True)
                                     import traceback
                                     traceback.print_exc()
-                        break
+                        # Break out of assistant message loop if selection was processed
+                        if selection_processed:
+                            break
         
         # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
@@ -1616,14 +1653,18 @@ async def chat(request: ChatRequest, req: Request):
                                 f"- Or provide more details about the location (e.g., 'Madrid, Spain' or 'the first one')"
                             )
                             
-                            # Add selection request as assistant message, then add user message to continue
+                            # Add tool result to messages so it's available for selection detection in next request
+                            # Store the raw tool output as JSON so we can parse it later
+                            import json
+                            tool_result_msg = f"Tool Result: {json.dumps(result_data, separators=(',', ':'))}"
+                            current_messages.append({"role": "assistant", "content": response_content})
+                            current_messages.append({"role": "user", "content": tool_result_msg})
+                            
+                            # Add selection request as assistant message
                             current_messages.append({"role": "assistant", "content": selection_message})
-                            # Add a placeholder user message to trigger next iteration
-                            # The actual user response will come in the next request, but we'll handle it in the selection logic above
-                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Added location selection request, keeping tools available", flush=True)
-                            # Don't return - continue loop to process selection
-                            # But we need to break out since we've already added the response
-                            # Actually, we should return here since we're asking the user
+                            
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Added tool result and location selection request to messages", flush=True)
+                            # Return the selection message to user
                             tools = []
                             tools_to_send = []
                             return {"role": "assistant", "content": selection_message}
