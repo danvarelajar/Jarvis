@@ -711,6 +711,44 @@ async def chat(request: ChatRequest, req: Request):
                     content = msg.get("content", "")
                     # Check if this message contains location selection request
                     if "locations matching your search" in content or "Please specify which location" in content:
+                        # Ensure weather tools are loaded if we're processing a selection
+                        # This is important because the user's selection response (e.g., "1") may not include @weather prefix
+                        # but we need weather tools to continue the flow
+                        if not any("weather__" in (t.get("name") or "") for t in tools):
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Weather tools not loaded, loading them for selection processing", flush=True)
+                            try:
+                                # Try to find weather server from available servers
+                                weather_server = None
+                                for server in available_servers:
+                                    if "weather" in server.lower():
+                                        weather_server = server
+                                        break
+                                
+                                if weather_server:
+                                    weather_tools = await connection_manager.list_tools(weather_server)
+                                    tools.extend(weather_tools)
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Loaded {len(weather_tools)} weather tools from server '{weather_server}'", flush=True)
+                                else:
+                                    # Weather server not found in available_servers, try to find it from connection_manager
+                                    # This handles cases where the server exists but wasn't in the initial available_servers list
+                                    for server_name in connection_manager.connections.keys():
+                                        if "weather" in server_name.lower():
+                                            weather_server = server_name
+                                            weather_tools = await connection_manager.list_tools(weather_server)
+                                            tools.extend(weather_tools)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Loaded {len(weather_tools)} weather tools from server '{weather_server}' (found in connections)", flush=True)
+                                            break
+                                    
+                                    # If still not found and in naive mode, try loading all tools
+                                    if not weather_server and agent_mode == "naive":
+                                        all_tools = await connection_manager.list_tools()
+                                        weather_tools = [t for t in all_tools if "weather__" in (t.get("name") or "")]
+                                        tools.extend(weather_tools)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Loaded {len(weather_tools)} weather tools from all servers (naive mode)", flush=True)
+                            except Exception as e:
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Error loading weather tools: {e}", flush=True)
+                                import traceback
+                                traceback.print_exc()
                         # Try to extract location data from the message or from tool results
                         # Look for tool results in previous messages
                         for prev_msg in reversed(current_messages):
@@ -772,7 +810,26 @@ async def chat(request: ChatRequest, req: Request):
                                                     weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
                                                     weather_flow_state = "need_forecast"
                                                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Selection processed, coordinates: {weather_coordinates}, proceeding to forecast", flush=True)
-                                                    # Continue to tool call logic
+                                                    
+                                                    # Add explicit instruction to LLM to call get_complete_forecast with selected coordinates
+                                                    location_display = selected_location.get('name', 'Unknown')
+                                                    if selected_location.get('state'):
+                                                        location_display += f", {selected_location.get('state')}"
+                                                    if selected_location.get('country'):
+                                                        location_display += f", {selected_location.get('country')}"
+                                                    
+                                                    selection_instruction = (
+                                                        f"User has selected location: {location_display}.\n\n"
+                                                        f"CRITICAL INSTRUCTION: You MUST immediately call 'weather__get_complete_forecast' with these EXACT coordinates: "
+                                                        f"latitude={lat}, longitude={lon}.\n\n"
+                                                        f"Output ONLY the JSON tool call (no text, no explanations):\n"
+                                                        f"{{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}\n\n"
+                                                        f"Do NOT output any text before or after the JSON. Do NOT wrap it in code blocks. Just the raw JSON."
+                                                    )
+                                                    current_messages.append({"role": "user", "content": selection_instruction})
+                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Added instruction to call get_complete_forecast with coordinates: lat={lat}, lon={lon}", flush=True)
+                                                    
+                                                    # Continue to tool call logic - tools should be available
                                                     break
                                                 else:
                                                     return {"role": "assistant", "content": f"Error: Selected location '{selected_location.get('name')}' does not have valid coordinates. Please try another location."}
