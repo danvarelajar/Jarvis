@@ -368,7 +368,7 @@ function App() {
                                         console.error("Failed to save Ollama URL:", error);
                                     }
                                 }}
-                                placeholder="http://10.3.0.7:11434"
+                                placeholder="http://ollama.fortinet.demo:11434"
                                     className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none mb-2"
                             />
                                 <div className="flex items-center gap-2">
