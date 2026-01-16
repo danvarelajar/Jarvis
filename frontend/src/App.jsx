@@ -29,6 +29,10 @@ function App() {
     const cleanMarkdownContent = (content) => {
         if (!content || typeof content !== 'string') return content;
         
+        // Remove HTML comments (e.g., <!-- LOCATIONS_DATA: [...] -->)
+        // This prevents embedded data from being displayed to users
+        content = content.replace(/<!--[\s\S]*?-->/g, '');
+        
         // Remove markdown code blocks that wrap text/markdown content
         // Pattern: ```text\n...\n``` or ```markdown\n...\n``` or ```\n...\n```
         const codeBlockPattern = /^```(?:text|markdown|md)?\n([\s\S]*?)\n```$/;
