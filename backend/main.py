@@ -1756,9 +1756,10 @@ async def chat(request: ChatRequest, req: Request):
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result JSON length: {len(tool_result_json)} chars", flush=True)
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Embedded locations data in selection message (fallback)", flush=True)
                             
-                            # Return the selection message WITHOUT embedded data to frontend (user shouldn't see it)
-                            # The embedded data is stored in current_messages (message history) so we can extract it in next request
-                            return {"role": "assistant", "content": selection_message}
+                            # Return the selection message WITH embedded data (as HTML comment - should be hidden by frontend)
+                            # The embedded data must be in the response so frontend includes it in next request
+                            # HTML comments should be automatically hidden by browsers/frontend rendering
+                            return {"role": "assistant", "content": selection_message_with_data}
                         
                         # Single location or array with one element - proceed as before
                         if isinstance(result_data, list) and len(result_data) == 1:
