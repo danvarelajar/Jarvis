@@ -809,6 +809,15 @@ async def chat(request: ChatRequest, req: Request):
                                         break
                                     else:
                                         print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result is not a list with >1 items (type: {type(result_data)}, length: {len(result_data) if isinstance(result_data, list) else 'N/A'})", flush=True)
+                                except json.JSONDecodeError as e:
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] JSON decode error parsing tool result: {e}", flush=True)
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result text that failed: {tool_result_text[:500]}", flush=True)
+                                    continue
+                                except Exception as e:
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing tool result from message: {e}", flush=True)
+                                    import traceback
+                                    traceback.print_exc()
+                                    continue
                         
                         # Fallback: If tool result not found, try to extract from assistant message with embedded data
                         if not locations_list and result_data is None:
@@ -830,15 +839,6 @@ async def chat(request: ChatRequest, req: Request):
                                         except Exception as e:
                                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Error extracting embedded locations data: {e}", flush=True)
                                             continue
-                                except json.JSONDecodeError as e:
-                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] JSON decode error parsing tool result: {e}", flush=True)
-                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result text that failed: {tool_result_text[:500]}", flush=True)
-                                    continue
-                                except Exception as e:
-                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing tool result from message: {e}", flush=True)
-                                    import traceback
-                                    traceback.print_exc()
-                                    continue
                         
                         # If we found result_data, parse it into locations_list
                         if result_data and isinstance(result_data, list) and len(result_data) > 1:
