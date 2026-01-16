@@ -863,71 +863,72 @@ async def chat(request: ChatRequest, req: Request):
                                     })
                             
                             if locations_list:
-                                            # Try to parse user's selection
-                                            user_lower = user_message.lower()
-                                            selected_location = None
+                                # Try to parse user's selection
+                                try:
+                                    user_lower = user_message.lower()
+                                    selected_location = None
+                                    
+                                    # Check for number selection (e.g., "1", "first", "the first one")
+                                    for loc in locations_list:
+                                        idx = loc.get("index", 0)
+                                        # Check for explicit number
+                                        if str(idx) in user_message or f"number {idx}" in user_lower or (idx == 1 and any(word in user_lower for word in ["first", "1st", "one"])):
+                                            selected_location = loc
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] User selected location {idx}: {loc.get('name')}", flush=True)
+                                            break
+                                    
+                                    # If no number match, try to match by location name/details
+                                    if not selected_location:
+                                        for loc in locations_list:
+                                            name = loc.get("name", "").lower()
+                                            if name and name in user_lower:
+                                                selected_location = loc
+                                                print(f"[{get_timestamp()}] [WEATHER_FLOW] User selected location by name: {loc.get('name')}", flush=True)
+                                                break
+                                    
+                                    if selected_location:
+                                        # Extract coordinates and proceed to forecast
+                                        lat = selected_location.get("latitude")
+                                        lon = selected_location.get("longitude")
+                                        if lat is not None and lon is not None:
+                                            weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
+                                            weather_flow_state = "need_forecast"
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Selection processed successfully!", flush=True)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Selected location: {selected_location.get('name')} (index {selected_location.get('index')})", flush=True)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Coordinates: lat={lat}, lon={lon}", flush=True)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] State updated to: need_forecast", flush=True)
                                             
-                                            # Check for number selection (e.g., "1", "first", "the first one")
-                                            for loc in locations_list:
-                                                idx = loc.get("index", 0)
-                                                # Check for explicit number
-                                                if str(idx) in user_message or f"number {idx}" in user_lower or (idx == 1 and any(word in user_lower for word in ["first", "1st", "one"])):
-                                                    selected_location = loc
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] User selected location {idx}: {loc.get('name')}", flush=True)
-                                                    break
+                                            # Add explicit instruction to LLM to call get_complete_forecast with selected coordinates
+                                            location_display = selected_location.get('name', 'Unknown')
+                                            if selected_location.get('state'):
+                                                location_display += f", {selected_location.get('state')}"
+                                            if selected_location.get('country'):
+                                                location_display += f", {selected_location.get('country')}"
                                             
-                                            # If no number match, try to match by location name/details
-                                            if not selected_location:
-                                                for loc in locations_list:
-                                                    name = loc.get("name", "").lower()
-                                                    if name and name in user_lower:
-                                                        selected_location = loc
-                                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] User selected location by name: {loc.get('name')}", flush=True)
-                                                        break
+                                            selection_instruction = (
+                                                f"User has selected location: {location_display}.\n\n"
+                                                f"CRITICAL INSTRUCTION: You MUST immediately call 'weather__get_complete_forecast' with these EXACT coordinates: "
+                                                f"latitude={lat}, longitude={lon}.\n\n"
+                                                f"Output ONLY the JSON tool call (no text, no explanations):\n"
+                                                f"{{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}\n\n"
+                                                f"Do NOT output any text before or after the JSON. Do NOT wrap it in code blocks. Just the raw JSON."
+                                            )
+                                            current_messages.append({"role": "user", "content": selection_instruction})
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Added instruction message to call get_complete_forecast", flush=True)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Instruction preview: {selection_instruction[:150]}...", flush=True)
                                             
-                                            if selected_location:
-                                                # Extract coordinates and proceed to forecast
-                                                lat = selected_location.get("latitude")
-                                                lon = selected_location.get("longitude")
-                                                if lat is not None and lon is not None:
-                                                    weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
-                                                    weather_flow_state = "need_forecast"
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Selection processed successfully!", flush=True)
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Selected location: {selected_location.get('name')} (index {selected_location.get('index')})", flush=True)
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Coordinates: lat={lat}, lon={lon}", flush=True)
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] State updated to: need_forecast", flush=True)
-                                                    
-                                                    # Add explicit instruction to LLM to call get_complete_forecast with selected coordinates
-                                                    location_display = selected_location.get('name', 'Unknown')
-                                                    if selected_location.get('state'):
-                                                        location_display += f", {selected_location.get('state')}"
-                                                    if selected_location.get('country'):
-                                                        location_display += f", {selected_location.get('country')}"
-                                                    
-                                                    selection_instruction = (
-                                                        f"User has selected location: {location_display}.\n\n"
-                                                        f"CRITICAL INSTRUCTION: You MUST immediately call 'weather__get_complete_forecast' with these EXACT coordinates: "
-                                                        f"latitude={lat}, longitude={lon}.\n\n"
-                                                        f"Output ONLY the JSON tool call (no text, no explanations):\n"
-                                                        f"{{'tool': 'weather__get_complete_forecast', 'arguments': {{'latitude': {lat}, 'longitude': {lon}}}}}\n\n"
-                                                        f"Do NOT output any text before or after the JSON. Do NOT wrap it in code blocks. Just the raw JSON."
-                                                    )
-                                                    current_messages.append({"role": "user", "content": selection_instruction})
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Added instruction message to call get_complete_forecast", flush=True)
-                                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Instruction preview: {selection_instruction[:150]}...", flush=True)
-                                                    
-                                                    # Mark selection as processed and break out of all loops to continue to LLM query
-                                                    selection_processed = True
-                                                    break
-                                                else:
-                                                    return {"role": "assistant", "content": f"Error: Selected location '{selected_location.get('name')}' does not have valid coordinates. Please try another location."}
-                                            else:
-                                                # Could not determine selection - ask user to clarify
-                                                locations_text = "\n".join([f"{loc['index']}. {loc['name']}" + 
-                                                                             (f", {loc['state']}" if loc['state'] else "") +
-                                                                             (f", {loc['country']}" if loc['country'] else "") 
-                                                                             for loc in locations_list])
-                                                return {"role": "assistant", "content": f"I couldn't determine which location you selected. Please specify:\n\n{locations_text}\n\nReply with the number (e.g., '1' or '2') or the location name."}
+                                            # Mark selection as processed and break out of all loops to continue to LLM query
+                                            selection_processed = True
+                                            break
+                                        else:
+                                            return {"role": "assistant", "content": f"Error: Selected location '{selected_location.get('name')}' does not have valid coordinates. Please try another location."}
+                                    else:
+                                        # Could not determine selection - ask user to clarify
+                                        locations_text = "\n".join([f"{loc['index']}. {loc['name']}" + 
+                                                                     (f", {loc['state']}" if loc['state'] else "") +
+                                                                     (f", {loc['country']}" if loc['country'] else "") 
+                                                                     for loc in locations_list])
+                                        return {"role": "assistant", "content": f"I couldn't determine which location you selected. Please specify:\n\n{locations_text}\n\nReply with the number (e.g., '1' or '2') or the location name."}
                                 except Exception as e:
                                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing selection: {e}", flush=True)
                                     import traceback
