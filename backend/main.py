@@ -822,26 +822,45 @@ async def chat(request: ChatRequest, req: Request):
                         # Fallback: If tool result not found, try to extract from assistant message with embedded data
                         if not locations_list and result_data is None:
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result not found, trying fallback: extract from assistant message", flush=True)
-                            for msg in reversed(current_messages):
+                            for msg_idx, msg in enumerate(reversed(current_messages)):
                                 if msg.get("role") == "assistant":
                                     content = msg.get("content", "")
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Checking assistant message {msg_idx}, length: {len(content)}, contains LOCATIONS_DATA: {'LOCATIONS_DATA:' in content}", flush=True)
                                     if "LOCATIONS_DATA:" in content:
                                         try:
                                             import json
                                             import re
-                                            # Extract JSON from HTML comment
-                                            match = re.search(r'<!-- LOCATIONS_DATA: (\[.*?\]) -->', content, re.DOTALL)
+                                            # Extract JSON from HTML comment - try multiple patterns
+                                            # Pattern 1: Standard HTML comment
+                                            match = re.search(r'<!--\s*LOCATIONS_DATA:\s*(\[.*?\])\s*-->', content, re.DOTALL)
+                                            if not match:
+                                                # Pattern 2: Without spaces
+                                                match = re.search(r'<!--LOCATIONS_DATA:(\[.*?\])-->', content, re.DOTALL)
+                                            if not match:
+                                                # Pattern 3: More flexible
+                                                match = re.search(r'LOCATIONS_DATA:\s*(\[.*?\])', content, re.DOTALL)
+                                            
                                             if match:
                                                 locations_data_json = match.group(1)
+                                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Found embedded data, JSON length: {len(locations_data_json)}", flush=True)
                                                 locations_list = json.loads(locations_data_json)
                                                 print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Extracted {len(locations_list)} locations from embedded data in assistant message", flush=True)
                                                 break
+                                            else:
+                                                print(f"[{get_timestamp()}] [WEATHER_FLOW] LOCATIONS_DATA found but regex didn't match. Content snippet: {content[-500:]}", flush=True)
+                                        except json.JSONDecodeError as e:
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] JSON decode error extracting embedded locations data: {e}", flush=True)
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] JSON string that failed: {locations_data_json[:200] if 'locations_data_json' in locals() else 'N/A'}", flush=True)
+                                            continue
                                         except Exception as e:
                                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Error extracting embedded locations data: {e}", flush=True)
+                                            import traceback
+                                            traceback.print_exc()
                                             continue
                         
                         # If we found result_data, parse it into locations_list
                         if result_data and isinstance(result_data, list) and len(result_data) > 1:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Found result_data with {len(result_data)} locations, parsing into locations_list", flush=True)
                             # Parse locations from result
                             locations_list = []
                             for idx, loc in enumerate(result_data, 1):
@@ -863,6 +882,7 @@ async def chat(request: ChatRequest, req: Request):
                                     })
                             
                             if locations_list:
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Processing selection with {len(locations_list)} locations available", flush=True)
                                 # Try to parse user's selection
                                 try:
                                     user_lower = user_message.lower()
@@ -935,7 +955,12 @@ async def chat(request: ChatRequest, req: Request):
                                     traceback.print_exc()
                         # Break out of assistant message loop if selection was processed
                         if selection_processed:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Selection processed, breaking out of message loop", flush=True)
                             break
+                        else:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Selection NOT processed - locations_list={locations_list is not None}, result_data={result_data is not None}", flush=True)
+                            if locations_list is None:
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] locations_list is None - selection processing will not work", flush=True)
         
         # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
@@ -1730,8 +1755,9 @@ async def chat(request: ChatRequest, req: Request):
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result JSON length: {len(tool_result_json)} chars", flush=True)
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Embedded locations data in selection message (fallback)", flush=True)
                             
-                            # Return the clean selection message (without the embedded data) to user
-                            return {"role": "assistant", "content": selection_message}
+                            # Return the selection message WITH embedded data so it's available in next request
+                            # The embedded data is in HTML comment so it won't be visible to user
+                            return {"role": "assistant", "content": selection_message_with_data}
                         
                         # Single location or array with one element - proceed as before
                         if isinstance(result_data, list) and len(result_data) == 1:
