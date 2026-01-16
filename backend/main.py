@@ -705,8 +705,24 @@ async def chat(request: ChatRequest, req: Request):
         # Handle weather flow selection state - check if last assistant message was asking for location selection
         # This handles the case where user is responding to a location selection request from previous turn
         selection_processed = False
-        if not weather_flow_state or weather_flow_state == "need_selection":
-            print(f"[{get_timestamp()}] [WEATHER_FLOW] Checking for location selection (weather_flow_state: {weather_flow_state})", flush=True)
+        
+        # Check if we should process selection - either no state set or explicitly in need_selection state
+        # Also check if user message looks like a selection (just a number or location name)
+        user_message_stripped = user_message.strip()
+        user_message_looks_like_selection = (
+            user_message_stripped.isdigit() or  # Just a number like "1", "2"
+            len(user_message_stripped.split()) <= 3  # Short message like "Madrid, Spain"
+        )
+        
+        should_check_selection = (
+            (not weather_flow_state or weather_flow_state == "need_selection") and
+            user_message_looks_like_selection
+        )
+        
+        print(f"[{get_timestamp()}] [WEATHER_FLOW] Selection check: weather_flow_state={weather_flow_state}, user_message='{user_message_stripped}', looks_like_selection={user_message_looks_like_selection}, should_check={should_check_selection}", flush=True)
+        
+        if should_check_selection:
+            print(f"[{get_timestamp()}] [WEATHER_FLOW] Checking for location selection (weather_flow_state: {weather_flow_state}, user_message: '{user_message}')", flush=True)
             # Check conversation history for location selection request
             for msg in reversed(current_messages):
                 if msg.get("role") == "assistant":
@@ -759,8 +775,12 @@ async def chat(request: ChatRequest, req: Request):
                         result_data = None
                         
                         # First, try to find tool result in message history
-                        for prev_msg in reversed(current_messages):
-                            if prev_msg.get("role") == "user" and "Tool Result:" in prev_msg.get("content", ""):
+                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Searching through {len(current_messages)} messages for tool result", flush=True)
+                        for idx, prev_msg in enumerate(reversed(current_messages)):
+                            msg_role = prev_msg.get("role", "")
+                            msg_content = prev_msg.get("content", "")
+                            if msg_role == "user" and "Tool Result:" in msg_content:
+                                print(f"[{get_timestamp()}] [WEATHER_FLOW] Found potential tool result at message index {len(current_messages) - idx - 1}", flush=True)
                                 try:
                                     import json
                                     # Extract tool result - handle different formats
@@ -773,18 +793,51 @@ async def chat(request: ChatRequest, req: Request):
                                         tool_result_text = tool_result_text.split("🚨")[0]
                                     tool_result_text = tool_result_text.strip()
                                     
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Extracted tool result text (length: {len(tool_result_text)}): {tool_result_text[:200]}...", flush=True)
+                                    
                                     # Try to parse as JSON
                                     if tool_result_text.startswith("[") or tool_result_text.startswith("{"):
                                         result_data = json.loads(tool_result_text)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Successfully parsed tool result as JSON", flush=True)
                                     else:
                                         # Might be a string representation, try to parse
                                         result_data = json.loads(tool_result_text) if tool_result_text else None
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Parsed tool result (non-standard format)", flush=True)
                                     
                                     if isinstance(result_data, list) and len(result_data) > 1:
-                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Found tool result with {len(result_data)} locations in message history", flush=True)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Found tool result with {len(result_data)} locations in message history", flush=True)
                                         break
+                                    else:
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result is not a list with >1 items (type: {type(result_data)}, length: {len(result_data) if isinstance(result_data, list) else 'N/A'})", flush=True)
+                        
+                        # Fallback: If tool result not found, try to extract from assistant message with embedded data
+                        if not locations_list and result_data is None:
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result not found, trying fallback: extract from assistant message", flush=True)
+                            for msg in reversed(current_messages):
+                                if msg.get("role") == "assistant":
+                                    content = msg.get("content", "")
+                                    if "LOCATIONS_DATA:" in content:
+                                        try:
+                                            import json
+                                            import re
+                                            # Extract JSON from HTML comment
+                                            match = re.search(r'<!-- LOCATIONS_DATA: (\[.*?\]) -->', content, re.DOTALL)
+                                            if match:
+                                                locations_data_json = match.group(1)
+                                                locations_list = json.loads(locations_data_json)
+                                                print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Extracted {len(locations_list)} locations from embedded data in assistant message", flush=True)
+                                                break
+                                        except Exception as e:
+                                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Error extracting embedded locations data: {e}", flush=True)
+                                            continue
+                                except json.JSONDecodeError as e:
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] JSON decode error parsing tool result: {e}", flush=True)
+                                    print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result text that failed: {tool_result_text[:500]}", flush=True)
+                                    continue
                                 except Exception as e:
                                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Error parsing tool result from message: {e}", flush=True)
+                                    import traceback
+                                    traceback.print_exc()
                                     continue
                         
                         # If we found result_data, parse it into locations_list
@@ -1656,17 +1709,27 @@ async def chat(request: ChatRequest, req: Request):
                             # Add tool result to messages so it's available for selection detection in next request
                             # Store the raw tool output as JSON so we can parse it later
                             import json
-                            tool_result_msg = f"Tool Result: {json.dumps(result_data, separators=(',', ':'))}"
+                            tool_result_json = json.dumps(result_data, separators=(',', ':'))
+                            tool_result_msg = f"Tool Result: {tool_result_json}"
                             current_messages.append({"role": "assistant", "content": response_content})
                             current_messages.append({"role": "user", "content": tool_result_msg})
                             
+                            # Embed location data in selection message as hidden JSON for fallback parsing
+                            # This ensures we can extract coordinates even if tool result isn't in message history
+                            locations_data_json = json.dumps(locations_list, separators=(',', ':'))
+                            selection_message_with_data = (
+                                f"{selection_message}\n\n"
+                                f"<!-- LOCATIONS_DATA: {locations_data_json} -->"
+                            )
+                            
                             # Add selection request as assistant message
-                            current_messages.append({"role": "assistant", "content": selection_message})
+                            current_messages.append({"role": "assistant", "content": selection_message_with_data})
                             
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Added tool result and location selection request to messages", flush=True)
-                            # Return the selection message to user
-                            tools = []
-                            tools_to_send = []
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Tool result JSON length: {len(tool_result_json)} chars", flush=True)
+                            print(f"[{get_timestamp()}] [WEATHER_FLOW] Embedded locations data in selection message (fallback)", flush=True)
+                            
+                            # Return the clean selection message (without the embedded data) to user
                             return {"role": "assistant", "content": selection_message}
                         
                         # Single location or array with one element - proceed as before
