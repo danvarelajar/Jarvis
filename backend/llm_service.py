@@ -828,8 +828,14 @@ def parse_llm_response(response_content: str) -> dict:
         # Attempt to find JSON object using regex
         import re
         
-        # First, clean markdown code blocks if present
+        # RECOMMENDATION 1 & 4: Strip HTML comments BEFORE parsing JSON
+        # This prevents embedded data (like LOCATIONS_DATA) from being parsed as tool calls
         clean_content = response_content.strip()
+        # Remove HTML comments (e.g., <!-- LOCATIONS_DATA: [...] -->)
+        clean_content = re.sub(r'<!--[\s\S]*?-->', '', clean_content)
+        print(f"[{get_timestamp()}] [PARSE] Stripped HTML comments from response", flush=True)
+        
+        # First, clean markdown code blocks if present
         if clean_content.startswith("```json"):
             clean_content = clean_content[7:].strip()
         elif clean_content.startswith("```"):
@@ -845,7 +851,10 @@ def parse_llm_response(response_content: str) -> dict:
         else:
             # Look for a JSON object structure: { ... }
             # Use a more robust regex that handles nested braces
-            # First try to find JSON object boundaries
+            # RECOMMENDATION 3: Since HTML comments are already stripped, any JSON found should be from the actual response
+            # We'll validate it has "tool" and "arguments" fields after parsing
+            
+            # Find first JSON object by counting braces
             brace_start = clean_content.find('{')
             if brace_start != -1:
                 # Find matching closing brace by counting braces
@@ -871,8 +880,27 @@ def parse_llm_response(response_content: str) -> dict:
 
         data = json.loads(json_str)
         
-        # Check if JSON is missing "tool" field entirely (LLM hallucinated wrong structure)
+        # RECOMMENDATION 2 & 3: Only treat JSON as tool call if it has both "tool" and "arguments" fields
+        # Also detect embedded data patterns (like LOCATIONS_DATA) and treat as text, not error
         if "tool" not in data:
+            # Check if this looks like embedded data (e.g., location data with "index", "name", "latitude", etc.)
+            is_embedded_data = False
+            if isinstance(data, list):
+                # Arrays are likely embedded data (e.g., list of locations)
+                is_embedded_data = True
+                print(f"[{get_timestamp()}] [PARSE] Detected JSON array - likely embedded data, treating as text", flush=True)
+            elif isinstance(data, dict):
+                # Check for common embedded data patterns
+                embedded_data_keys = ["index", "name", "latitude", "longitude", "country", "state", "full_data"]
+                if any(key in data for key in embedded_data_keys):
+                    is_embedded_data = True
+                    print(f"[{get_timestamp()}] [PARSE] Detected embedded data pattern (has keys like 'index', 'name', 'latitude'), treating as text", flush=True)
+            
+            if is_embedded_data:
+                # This is embedded data, not a tool call - treat as text response
+                print(f"[{get_timestamp()}] [PARSE] JSON appears to be embedded data, not a tool call. Treating response as text.", flush=True)
+                return {"type": "text", "content": response_content}
+            
             # This is a common error - LLM returns JSON but not in tool call format
             error_msg = (
                 f"LLM format error: You returned JSON but it's missing the required 'tool' and 'arguments' fields. "
@@ -906,9 +934,17 @@ def parse_llm_response(response_content: str) -> dict:
             raise  # Re-raise to be caught by outer except
         
     except (json.JSONDecodeError, ValidationError):
+        # RECOMMENDATION 3: Improved error handling - detect embedded data vs tool call attempts
+        # Check if response contains HTML comments with embedded data
+        if "<!--" in response_content and "LOCATIONS_DATA" in response_content:
+            print(f"[{get_timestamp()}] [PARSE] Response contains embedded data in HTML comment, treating as text", flush=True)
+            return {"type": "text", "content": response_content}
+        
         # If it's not valid JSON or doesn't match the schema, treat as text
         # But if it looks like it tried to be JSON (starts with {), return error
-        if response_content.strip().startswith("{") or "```json" in response_content:
+        # However, only return error if it's clearly a tool call attempt (not embedded data)
+        stripped = response_content.strip()
+        if (stripped.startswith("{") or "```json" in response_content) and "LOCATIONS_DATA" not in response_content:
             error_msg = "LLM format error: expected tool call JSON like {\"tool\": \"tool_name\", \"arguments\": {...}}. Put ALL parameters inside the 'arguments' object."
             print(f"[{get_timestamp()}] [PARSE] {error_msg}", flush=True)
             return {"type": "error", "message": error_msg}
