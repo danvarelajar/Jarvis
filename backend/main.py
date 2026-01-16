@@ -1159,6 +1159,51 @@ async def chat(request: ChatRequest, req: Request):
         if parsed_response["type"] == "text":
             # Reset format error counter on successful text response
             format_error_retries = 0
+            
+            # If tools are available and this is the first turn, the LLM should be calling tools, not returning text
+            # This prevents hallucination when tools are available
+            if tools_to_send and turn_index == 0:
+                # Check if the user's request clearly requires a tool (e.g., weather, booking, etc.)
+                user_msg_lower = user_message.lower()
+                requires_tool = False
+                
+                # Weather-related requests should use weather tools
+                if any(keyword in user_msg_lower for keyword in ["weather", "temperature", "forecast", "rain", "snow", "wind"]):
+                    if any("weather" in t.get("name", "").lower() for t in tools_to_send):
+                        requires_tool = True
+                
+                # Booking-related requests should use booking tools
+                if any(keyword in user_msg_lower for keyword in ["flight", "hotel", "book", "reservation", "itinerary"]):
+                    if any("booking" in t.get("name", "").lower() for t in tools_to_send):
+                        requires_tool = True
+                
+                if requires_tool:
+                    print(f"[{get_timestamp()}] [WARNING] LLM returned text instead of calling tool when tools are available", flush=True)
+                    print(f"[{get_timestamp()}] [WARNING] User request requires a tool but LLM hallucinated a response", flush=True)
+                    print(f"[{get_timestamp()}] [WARNING] Forcing tool call instead of accepting hallucinated text", flush=True)
+                    
+                    # Force the LLM to call the appropriate tool
+                    available_tool_names = [t.get("name", "") for t in tools_to_send]
+                    tool_hint = ""
+                    if "weather" in user_msg_lower:
+                        if any("search_location" in name for name in available_tool_names):
+                            tool_hint = "You MUST call 'weather__search_location' first to find the location, then call 'weather__get_complete_forecast' with the coordinates."
+                        elif any("get_complete_forecast" in name for name in available_tool_names):
+                            tool_hint = "You MUST call 'weather__get_complete_forecast' with latitude and longitude coordinates."
+                    elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
+                        tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
+                    
+                    if tool_hint:
+                        error_msg = (
+                            f"🚨 ERROR: You returned text instead of calling a tool. "
+                            f"The user's request requires a tool call. {tool_hint}\n\n"
+                            f"DO NOT generate fake data. DO NOT hallucinate weather/booking information. "
+                            f"You MUST call the tool to get real data.\n\n"
+                            f"Output ONLY the JSON tool call: {{\"tool\": \"tool_name\", \"arguments\": {{...}}}}"
+                        )
+                        current_messages.append({"role": "user", "content": error_msg})
+                        continue  # Retry with tool call enforcement
+            
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
             print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
