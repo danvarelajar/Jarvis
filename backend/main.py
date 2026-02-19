@@ -156,8 +156,9 @@ async def startup_event():
     connection_manager.set_sampling_callback(handle_sampling_message)
     # Reload config to apply callback to connections
     await connection_manager.load_config()
-    # Start config watcher
-    asyncio.create_task(connection_manager.watch_config())
+    # Start config watcher (only if not already running)
+    if not connection_manager._watcher_task or connection_manager._watcher_task.done():
+        connection_manager._watcher_task = asyncio.create_task(connection_manager.watch_config())
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):

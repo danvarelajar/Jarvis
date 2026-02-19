@@ -34,6 +34,7 @@ VOLUME /app/data
 # Expose port
 EXPOSE 3000
 
-# Run the application with multiple workers to handle concurrent requests
-# This prevents new requests from being queued behind long-running Ollama inference
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "3000", "--workers", "4"]
+# Run the application with a single worker
+# All operations are async (I/O bound), so FastAPI's event loop handles concurrent requests efficiently
+# Multiple workers cause duplicate MCP connections and config watchers (see WORKER_ANALYSIS.md)
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "3000"]

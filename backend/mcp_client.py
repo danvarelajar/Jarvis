@@ -310,6 +310,8 @@ class GlobalConnectionManager:
         # - naive: intentionally permissive to demonstrate failures
         self.agent_mode: str = "defender"
         self.last_config_mtime = 0
+        self._watcher_task: Optional[asyncio.Task] = None
+        self._reloading = False  # Flag to prevent concurrent reloads
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
         self.sampling_callback = callback
@@ -440,6 +442,8 @@ class GlobalConnectionManager:
             print(f"[{get_timestamp()}] [Jarvis] Secrets not found at {SECRETS_FILE}")
 
     async def watch_config(self):
+        # Prevent multiple watcher instances
+        # Note: self._watcher_task is set by the caller (startup_event) before this is called
         print(f"Starting config watcher for {CONFIG_FILE}")
         while True:
             await asyncio.sleep(2) # Check every 2 seconds
@@ -447,10 +451,21 @@ class GlobalConnectionManager:
                 try:
                     mtime = os.path.getmtime(CONFIG_FILE)
                     if mtime > self.last_config_mtime:
+                        # Skip if already reloading to prevent concurrent reloads
+                        if self._reloading:
+                            continue
+                        
+                        # Update timestamp immediately to prevent race conditions
+                        self.last_config_mtime = mtime
                         print("Config file changed, reloading...")
-                        await self.load_config()
+                        self._reloading = True
+                        try:
+                            await self.load_config()
+                        finally:
+                            self._reloading = False
                 except Exception as e:
                     print(f"Error watching config: {e}")
+                    self._reloading = False
 
     def save_config(self):
         # Save MCP Servers
@@ -474,6 +489,9 @@ class GlobalConnectionManager:
         try:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config, f, indent=2)
+            # Update mtime after saving to prevent immediate reload
+            if os.path.exists(CONFIG_FILE):
+                self.last_config_mtime = os.path.getmtime(CONFIG_FILE)
             print(f"Saved config to {CONFIG_FILE}")
         except Exception as e:
             print(f"Failed to save config: {e}")
