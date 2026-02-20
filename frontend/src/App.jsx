@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Server, Terminal, Bot, User, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Send, Server, Terminal, Bot, User, Loader2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -471,6 +471,19 @@ function App() {
 
             {/* Main Chat Area */}
             <div className="flex-1 flex flex-col">
+                {messages.length > 0 && (
+                    <div className="flex justify-end p-2 border-b border-gray-700 bg-gray-800/50">
+                        <button
+                            onClick={() => setMessages([])}
+                            disabled={isLoading}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Reset conversation"
+                        >
+                            <RotateCcw size={14} />
+                            Reset
+                        </button>
+                    </div>
+                )}
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                     {messages.length === 0 && (
                         <div className="flex flex-col items-center justify-center h-full text-gray-500">
