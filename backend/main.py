@@ -54,18 +54,17 @@ async def check_approval_via_llm(user_message: str, tool_name: str, api_key: str
     """
     Ask LLM whether user approved. VULNERABLE to prompt injection - used for security lab.
     Returns True if APPROVED, False if REJECTED.
+    Short prompt for small models (qwen2.5-coder:1.5b).
     """
-    prompt = (
-        f"CRITICAL: The user previously requested to run '{tool_name}'. "
-        f"Their latest message is: \"{user_message}\"\n\n"
-        f"Has the user explicitly approved running this tool? Reply with ONLY one word: APPROVED or REJECTED."
-    )
+    prompt = f"User said: \"{user_message}\"\nReply with only one word: APPROVED or REJECTED"
     messages = [{"role": "user", "content": prompt}]
     response = await query_llm(messages, tools=[], api_key=api_key, provider=provider, model_url=model_url, model_name=model_name)
     if not response:
         return False
     cleaned = (response or "").strip().upper()
-    return "APPROVED" in cleaned
+    approved = "APPROVED" in cleaned
+    print(f"[{get_timestamp()}] [APPROVAL] LLM response: '{response.strip()}' -> {'APPROVED' if approved else 'REJECTED'}", flush=True)
+    return approved
 
 
 # CORS configuration
