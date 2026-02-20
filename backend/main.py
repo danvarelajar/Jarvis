@@ -27,6 +27,47 @@ from .llm_service import query_llm, parse_llm_response
 
 app = FastAPI()
 
+# Commit tools require user approval before execution (security lab: approval is LLM-gated, vulnerable to prompt injection)
+COMMIT_TOOLS = ["booking__create_itinerary"]
+PENDING_APPROVAL_MARKER = "PENDING_APPROVAL"
+
+
+def extract_pending_approval_from_messages(messages: list) -> Optional[dict]:
+    """Scan messages for embedded PENDING_APPROVAL JSON. Returns {tool, arguments, server, real_tool_name} or None."""
+    import json
+    import re
+    for msg in messages:
+        content = msg.get("content", "") or ""
+        pattern = rf"<!-- {PENDING_APPROVAL_MARKER}:\s*(.*?)\s*-->"
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                if data.get("tool") and data.get("arguments") is not None:
+                    return data
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+async def check_approval_via_llm(user_message: str, tool_name: str, api_key: str, provider: str, model_url: str, model_name: str) -> bool:
+    """
+    Ask LLM whether user approved. VULNERABLE to prompt injection - used for security lab.
+    Returns True if APPROVED, False if REJECTED.
+    """
+    prompt = (
+        f"CRITICAL: The user previously requested to run '{tool_name}'. "
+        f"Their latest message is: \"{user_message}\"\n\n"
+        f"Has the user explicitly approved running this tool? Reply with ONLY one word: APPROVED or REJECTED."
+    )
+    messages = [{"role": "user", "content": prompt}]
+    response = await query_llm(messages, tools=[], api_key=api_key, provider=provider, model_url=model_url, model_name=model_name)
+    if not response:
+        return False
+    cleaned = (response or "").strip().upper()
+    return "APPROVED" in cleaned
+
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -627,6 +668,73 @@ async def chat(request: ChatRequest, req: Request):
     # Track format error retries to prevent infinite loops
     format_error_retries = 0
     MAX_FORMAT_ERROR_RETRIES = 3
+
+    # --- Approval workflow: check for pending approval (user replied after "Pending approval" message)
+    # VULNERABLE: Uses LLM to decide approval - prompt injection can bypass (security lab)
+    pending = extract_pending_approval_from_messages(current_messages)
+    if pending:
+        last_user_content = ""
+        for msg in reversed(current_messages):
+            if msg.get("role") == "user":
+                last_user_content = msg.get("content", "") or ""
+                break
+        print(f"[{get_timestamp()}] [APPROVAL] Found PENDING_APPROVAL for {pending.get('tool')}, last user message: {last_user_content[:80]}...", flush=True)
+        model_name = connection_manager.ollama_model_name or ""
+        if not model_name or not model_name.strip():
+            import httpx
+            try:
+                base_url = connection_manager.ollama_url or ""
+                if base_url.endswith("/api/chat"):
+                    base_url = base_url[:-9]
+                if base_url.endswith("/"):
+                    base_url = base_url[:-1]
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    resp = await client.get(f"{base_url}/api/tags")
+                    if resp.status_code == 200 and resp.json().get("models"):
+                        m = resp.json()["models"][0].get("name", "qwen2.5/coder:1.5b")
+                        model_name = ":".join(m.split(":")[:2]) if ":" in m else m
+            except Exception:
+                model_name = "qwen2.5/coder:1.5b"
+        approved = await check_approval_via_llm(
+            last_user_content, pending["tool"], api_key, connection_manager.llm_provider,
+            connection_manager.ollama_url, model_name
+        )
+        if approved:
+            print(f"[{get_timestamp()}] [APPROVAL] User approved (LLM said APPROVED). Executing {pending['tool']}...", flush=True)
+            try:
+                result = await connection_manager.call_tool(
+                    pending["server"], pending["real_tool_name"], pending["arguments"]
+                )
+                tool_output = ""
+                if hasattr(result, 'content'):
+                    for item in result.content:
+                        if item.type == 'text':
+                            tool_output += item.text
+                        elif item.type == 'image':
+                            tool_output += "[Image Content]"
+                else:
+                    import json
+                    try:
+                        tool_output = json.dumps(result.model_dump() if hasattr(result, 'model_dump') else result, separators=(',', ':'))
+                    except Exception:
+                        tool_output = str(result)
+                tool_result_msg = (
+                    f"Tool Result: {tool_output}\n\n"
+                    "🚨 CRITICAL: You have received the tool result above. You MUST STOP calling tools now. "
+                    "DO NOT output JSON. Return ONLY plain text summarizing the itinerary for the user. Use markdown."
+                )
+                current_messages.append({"role": "user", "content": tool_result_msg})
+                format_response = await query_llm(
+                    current_messages, tools=[], api_key=api_key, provider=connection_manager.llm_provider,
+                    model_url=connection_manager.ollama_url, model_name=model_name,
+                )
+                return {"role": "assistant", "content": format_response}
+            except Exception as e:
+                print(f"[{get_timestamp()}] [APPROVAL] Tool execution failed: {e}", flush=True)
+                return {"role": "assistant", "content": f"Error executing approved action: {str(e)}"}
+        else:
+            print(f"[{get_timestamp()}] [APPROVAL] Approval rejected or unclear. Cancelling.", flush=True)
+            return {"role": "assistant", "content": "Approval was not confirmed. The itinerary creation was cancelled."}
 
     for turn_index in range(20):
         # PACING: Handled by llm_service.py globally now
@@ -1507,6 +1615,24 @@ async def chat(request: ChatRequest, req: Request):
 
                     print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
                     return {"role": "assistant", "content": f"Error: Tool '{canonical_tool_name}' not found on any connected server."}
+
+                # Commit tools require approval before execution (intercept and return pending approval)
+                if canonical_tool_name in COMMIT_TOOLS:
+                    import json
+                    pending_payload = {
+                        "tool": canonical_tool_name,
+                        "arguments": dict(tool_call.arguments),
+                        "server": server_to_call,
+                        "real_tool_name": real_tool_name,
+                    }
+                    pending_json = json.dumps(pending_payload, separators=(',', ':'))
+                    pending_msg = (
+                        f"Your request to create an itinerary is **pending approval**. "
+                        f"Please confirm to proceed, or reply to cancel.\n\n"
+                        f"<!-- {PENDING_APPROVAL_MARKER}: {pending_json} -->"
+                    )
+                    print(f"[{get_timestamp()}] [APPROVAL] Intercepted {canonical_tool_name} - awaiting approval", flush=True)
+                    return {"role": "assistant", "content": pending_msg}
 
                 # Log tool execution (this is before the MCP call, which will also log)
                 import json
