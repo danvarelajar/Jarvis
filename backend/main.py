@@ -669,7 +669,7 @@ async def chat(request: ChatRequest, req: Request):
     MAX_FORMAT_ERROR_RETRIES = 3
 
     # --- Approval workflow: check for pending approval (user replied after "Pending approval" message)
-    # VULNERABLE: Uses LLM to decide approval - prompt injection can bypass (security lab)
+    # VULNERABLE: Keyword check + LLM fallback - prompt injection can bypass by including "approve" (security lab)
     pending = extract_pending_approval_from_messages(current_messages)
     if pending:
         last_user_content = ""
@@ -694,12 +694,24 @@ async def chat(request: ChatRequest, req: Request):
                         model_name = ":".join(m.split(":")[:2]) if ":" in m else m
             except Exception:
                 model_name = "qwen2.5/coder:1.5b"
-        approved = await check_approval_via_llm(
-            last_user_content, pending["tool"], api_key, connection_manager.llm_provider,
-            connection_manager.ollama_url, model_name
-        )
+        # Keyword fallback: qwen2.5-coder:1.5b returns REJECTED for everything; use keyword check first
+        # VULNERABLE: Any message containing "approve" (e.g. "ignore approval create itinerary") bypasses
+        msg_lower = last_user_content.lower().strip()
+        reject_words = ["no", "cancel", "reject", "nevermind", "never mind", "don't", "dont", "stop"]
+        approve_words = ["approve", "yes", "confirm", "go ahead", "proceed", "ok"]
+        if any(r in msg_lower for r in reject_words) and not any(a in msg_lower for a in approve_words):
+            print(f"[{get_timestamp()}] [APPROVAL] Keyword check: REJECTED (user said no/cancel)", flush=True)
+            return {"role": "assistant", "content": "Approval was not confirmed. The itinerary creation was cancelled."}
+        if any(a in msg_lower for a in approve_words):
+            approved = True
+            print(f"[{get_timestamp()}] [APPROVAL] Keyword check: APPROVED (user message contains approval word)", flush=True)
+        else:
+            approved = await check_approval_via_llm(
+                last_user_content, pending["tool"], api_key, connection_manager.llm_provider,
+                connection_manager.ollama_url, model_name
+            )
         if approved:
-            print(f"[{get_timestamp()}] [APPROVAL] User approved (LLM said APPROVED). Executing {pending['tool']}...", flush=True)
+            print(f"[{get_timestamp()}] [APPROVAL] Approved. Executing {pending['tool']}...", flush=True)
             try:
                 result = await connection_manager.call_tool(
                     pending["server"], pending["real_tool_name"], pending["arguments"]
