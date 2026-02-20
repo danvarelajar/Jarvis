@@ -305,10 +305,6 @@ class GlobalConnectionManager:
         self.llm_provider: str = "openai" # openai or ollama
         self.ollama_url: str = "http://10.3.0.7:11434"
         self.ollama_model_name: str = ""  # Model name for Ollama (loaded from config or fetched from Ollama)
-        # Lab alignment: controls how aggressively the agent exposes tools and follows untrusted text.
-        # - defender: least-privilege tool exposure + safer tool-output framing
-        # - naive: intentionally permissive to demonstrate failures
-        self.agent_mode: str = "defender"
         self.last_config_mtime = 0
         self._watcher_task: Optional[asyncio.Task] = None
         self._reloading = False  # Flag to prevent concurrent reloads
@@ -419,7 +415,6 @@ class GlobalConnectionManager:
                     self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
                     old_model = getattr(self, "ollama_model_name", None)
                     self.ollama_model_name = llm_config.get("ollamaModelName", "")
-                    self.agent_mode = llm_config.get("agentMode", "defender")
                 print(f"[{get_timestamp()}] [CONFIG] Loaded LLM config from {LLM_CONFIG_FILE}")
                 print(f"[{get_timestamp()}] [CONFIG] Loaded ollama_model_name: '{self.ollama_model_name}' (was: '{old_model}')")
             except Exception as e:
@@ -520,8 +515,7 @@ class GlobalConnectionManager:
         llm_config = {
             "llmProvider": self.llm_provider,
             "ollamaUrl": self.ollama_url,
-            "ollamaModelName": self.ollama_model_name,
-            "agentMode": self.agent_mode
+            "ollamaModelName": self.ollama_model_name
         }
         try:
             with open(LLM_CONFIG_FILE, 'w') as f:

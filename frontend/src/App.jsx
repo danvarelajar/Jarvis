@@ -18,7 +18,6 @@ function App() {
     const [ollamaModelName, setOllamaModelName] = useState('gemma3:1B');
     const [ollamaModels, setOllamaModels] = useState([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
-    const [agentMode, setAgentMode] = useState('defender');
     const messagesEndRef = useRef(null);
 
     const scrollToBottom = () => {
@@ -76,7 +75,6 @@ function App() {
                     if (config.llmProvider) setLlmProvider(config.llmProvider);
                     if (config.ollamaUrl) setOllamaUrl(config.ollamaUrl);
                     if (config.ollamaModelName) setOllamaModelName(config.ollamaModelName);
-                    if (config.agentMode) setAgentMode(config.agentMode);
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
                         setServerConfigJson(JSON.stringify(config, null, 2));
                         // Also update the UI list of connected servers
@@ -129,8 +127,7 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                ollamaModelName: firstModel,
-                                                agentMode: agentMode
+                                                ollamaModelName: firstModel
                                             }),
                                         });
                                         console.log(`[FRONTEND] Auto-saved new model: "${firstModel}"`);
@@ -277,41 +274,6 @@ function App() {
 
                 <div className="mt-auto border-t border-gray-700 pt-4">
                     <div className="mb-4">
-                        <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">Agent Mode (Lab)</h3>
-                        <select
-                            value={agentMode}
-                            onChange={async (e) => {
-                                const newMode = e.target.value;
-                                setAgentMode(newMode);
-                                try {
-                                    const keyToSend = openaiApiKey.trim() ? openaiApiKey : undefined;
-                                    await fetch('/api/config', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            mcpServers: {},
-                                            ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
-                                            llmProvider: llmProvider,
-                                            ollamaUrl: ollamaUrl,
-                                            ollamaModelName: ollamaModelName,
-                                            agentMode: newMode
-                                        }),
-                                    });
-                                } catch (error) {
-                                    console.error("Failed to save agent mode:", error);
-                                }
-                            }}
-                            className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none"
-                        >
-                            <option value="defender">Defender (hardened)</option>
-                            <option value="naive">Naive (intentionally permissive)</option>
-                        </select>
-                        <p className="text-[11px] text-gray-500 mt-2 leading-snug">
-                            Defender uses least privilege + safer tool handling. Naive loads more tools to demonstrate attacks.
-                        </p>
-                    </div>
-
-                    <div className="mb-4">
                         <h3 className="text-xs uppercase text-gray-500 font-semibold mb-2">LLM Provider</h3>
                         <select
                             value={llmProvider}
@@ -329,8 +291,7 @@ function App() {
                                             ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                             llmProvider: newProvider,
                                             ollamaUrl: ollamaUrl,
-                                            ollamaModelName: ollamaModelName,
-                                            agentMode: agentMode
+                                            ollamaModelName: ollamaModelName
                                         }),
                                     });
                                 } catch (error) {
@@ -360,8 +321,7 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                    ollamaModelName: ollamaModelName,
-                                                agentMode: agentMode
+                                                ollamaModelName: ollamaModelName
                                             }),
                                         });
                                     } catch (error) {
@@ -385,8 +345,7 @@ function App() {
                                                     ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                     llmProvider: llmProvider,
                                                     ollamaUrl: ollamaUrl,
-                                                    ollamaModelName: newModel,
-                                                    agentMode: agentMode
+                                                    ollamaModelName: newModel
                                                 };
                                                 console.log(`[FRONTEND] Sending config update with ollamaModelName: "${newModel}"`, configPayload);
                                                 await fetch('/api/config', {
@@ -468,8 +427,7 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                ollamaModelName: ollamaModelName,
-                                                agentMode: agentMode
+                                                ollamaModelName: ollamaModelName
                                             }),
                                         });
                                     } catch (error) {

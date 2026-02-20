@@ -98,58 +98,38 @@ Think: "Can I do this in one step?" If yes, output the JSON tool call NOW.
 
 import httpx
 
-def get_current_date(agent_mode: str = "defender") -> tuple[str, str]:
+def get_current_date() -> tuple[str, str]:
     """
-    Gets the current date and time.
-    
-    VULNERABILITY (Naive Mode): Uses shell command execution which is vulnerable to command injection.
-    Defender Mode: Uses safe Python datetime module.
-    
-    Args:
-        agent_mode: 'defender' (safe) or 'naive' (vulnerable)
+    Gets the current date and time via shell command.
     
     Returns:
         Tuple of (current_date, current_datetime) as strings
     """
-    if agent_mode == "naive":
-        # VULNERABLE: Command injection vulnerability
-        # In naive mode, we use shell commands to get the date
-        # This allows attackers to inject commands via the date format or environment
-        try:
-            # Vulnerable: Direct shell execution without proper sanitization
-            # An attacker could potentially inject commands if they control the format string
-            # Example attack: If user input affects the format, they could do: "date; rm -rf /"
-            result = subprocess.run(
-                ["date", "+%Y-%m-%d"],
-                capture_output=True,
-                text=True,
-                shell=False,  # Using shell=False is safer, but we're still vulnerable to format injection
-                timeout=2
-            )
-            current_date = result.stdout.strip()
+    try:
+        result = subprocess.run(
+            ["date", "+%Y-%m-%d"],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=2
+        )
+        current_date = result.stdout.strip()
+        
+        result2 = subprocess.run(
+            ["date", "+%Y-%m-%d %H:%M:%S"],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=2
+        )
+        current_datetime = result2.stdout.strip()
+        
+        if not current_date or not current_datetime:
+            raise Exception("Command failed")
             
-            result2 = subprocess.run(
-                ["date", "+%Y-%m-%d %H:%M:%S"],
-                capture_output=True,
-                text=True,
-                shell=False,
-                timeout=2
-            )
-            current_datetime = result2.stdout.strip()
-            
-            # If commands fail, fall back to safe method
-            if not current_date or not current_datetime:
-                raise Exception("Command failed")
-                
-            return current_date, current_datetime
-        except Exception as e:
-            # Fallback to safe method if command fails
-            print(f"[WARNING] Date command failed, using safe fallback: {e}")
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            return current_date, current_datetime
-    else:
-        # Defender mode: Safe Python datetime
+        return current_date, current_datetime
+    except Exception as e:
+        print(f"[WARNING] Date command failed, using fallback: {e}")
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return current_date, current_datetime
@@ -619,7 +599,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "", use_qwen_rag: bool = False, agent_mode: str = "defender", user_query: str = "") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "", use_qwen_rag: bool = False, user_query: str = "") -> str:
     """
     Queries the selected LLM provider.
     
@@ -631,7 +611,6 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         model_url: URL for Ollama instance
         model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
-        agent_mode: 'defender' (safe) or 'naive' (vulnerable) - affects date retrieval method
     """
     global LAST_REQUEST_TIME
     
@@ -639,8 +618,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
     if provider == "ollama":
         # /api/chat approach: let Ollama apply model templates internally.
         # We provide a normal system prompt + message list (no manual control tokens).
-            # Get current date for context (vulnerable to command injection in naive mode)
-            current_date, current_datetime = get_current_date(agent_mode)
+            current_date, current_datetime = get_current_date()
             
             # Calculate tomorrow and day after tomorrow for explicit examples
             try:
@@ -726,8 +704,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
             return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
 
     # Construct the full prompt including system instructions (for OpenAI)
-    # Get current date for context (vulnerable to command injection in naive mode)
-    current_date, current_datetime = get_current_date(agent_mode)
+    current_date, current_datetime = get_current_date()
     
     # Calculate tomorrow and day after tomorrow for explicit examples
     try:
