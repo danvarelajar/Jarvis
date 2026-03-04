@@ -141,7 +141,8 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
         import httpx
         try:
             base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0), verify=not skip_verify) as client:
                 response = await client.get(f"{base_url}/v1/models")
                 if response.status_code == 200:
                     result = response.json()
@@ -180,7 +181,8 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
         api_key=api_key, 
         provider=provider, 
         model_url=connection_manager.ollama_url,
-        model_name=model_name
+        model_name=model_name,
+        skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
     )
     
     # Construct result
@@ -220,7 +222,8 @@ async def get_config():
         "openaiApiKey": connection_manager.openai_api_key,
         "llmProvider": connection_manager.llm_provider,
         "ollamaUrl": connection_manager.ollama_url,
-        "ollamaModelName": connection_manager.ollama_model_name
+        "ollamaModelName": connection_manager.ollama_model_name,
+        "ollamaSkipSslVerify": getattr(connection_manager, "ollama_skip_ssl_verify", False),
     }
     for server_key, conn in connection_manager.connections.items():
         # Preserve display name in the config response (helps labs that reference Booking__*)
@@ -238,6 +241,7 @@ class ConfigRequest(BaseModel):
     llmProvider: Optional[str] = None
     ollamaUrl: Optional[str] = None
     ollamaModelName: Optional[str] = None
+    ollamaSkipSslVerify: Optional[bool] = None
 
 @app.post("/api/config")
 async def update_config(request: ConfigRequest):
@@ -267,6 +271,8 @@ async def update_config(request: ConfigRequest):
             print(f"[{get_timestamp()}] [DEBUG] connection_manager.ollama_model_name is now: '{connection_manager.ollama_model_name}'")
         else:
             print(f"[{get_timestamp()}] [DEBUG] Skipped updating model name (empty after strip)")
+    if request.ollamaSkipSslVerify is not None:
+        connection_manager.ollama_skip_ssl_verify = request.ollamaSkipSslVerify
     
     # Save globally after updating fields
     connection_manager.save_config()
@@ -307,10 +313,13 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
     openai_base = f"{base_url}/v1"
     print(f"[{get_timestamp()}] [API] Preloading model '{model}' via OpenAI spec: {openai_base}")
 
+    skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
     try:
         from openai import AsyncOpenAI
+        import httpx
 
-        client = AsyncOpenAI(base_url=openai_base, api_key="ollama")
+        http_client = httpx.AsyncClient(verify=not skip_verify) if skip_verify else None
+        client = AsyncOpenAI(base_url=openai_base, api_key="ollama", http_client=http_client)
         http_start = time.time()
         print(f"[{get_timestamp()}] [API] Sending preload request (minimal chat completion)...")
         await client.chat.completions.create(
@@ -351,11 +360,12 @@ async def get_ollama_models(ollama_url: str = None):
     api_endpoint = f"{base_url}/v1/models"
     print(f"[{get_timestamp()}] [API] Fetching models from: {api_endpoint} (OpenAI spec)")
 
+    skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
     try:
         timeout = httpx.Timeout(10.0, connect=5.0)
         http_start = time.time()
         print(f"[{get_timestamp()}] [API] HTTP GET request initiated...")
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, verify=not skip_verify) as client:
             response = await client.get(api_endpoint)
             http_time = time.time() - http_start
             print(f"[{get_timestamp()}] [API] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
@@ -657,7 +667,8 @@ async def chat(request: ChatRequest, req: Request):
             import httpx
             try:
                 base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
-                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0), verify=not skip_verify) as client:
                     resp = await client.get(f"{base_url}/v1/models")
                     if resp.status_code == 200:
                         data = resp.json().get("data", [])
@@ -687,6 +698,7 @@ async def chat(request: ChatRequest, req: Request):
         response_content = await query_llm(
             approval_messages, tools=approval_tools or tools, api_key=api_key,
             provider=connection_manager.llm_provider, model_url=connection_manager.ollama_url, model_name=model_name,
+            skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
         )
         parsed = parse_llm_response(response_content or "")
         tool_data = parsed.get("data") if parsed.get("type") == "tool_call" else None
@@ -725,6 +737,7 @@ async def chat(request: ChatRequest, req: Request):
                 format_response = await query_llm(
                     current_messages, tools=[], api_key=api_key, provider=connection_manager.llm_provider,
                     model_url=connection_manager.ollama_url, model_name=model_name,
+                    skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
                 )
                 return {"role": "assistant", "content": format_response}
             except Exception as e:
@@ -1172,7 +1185,8 @@ async def chat(request: ChatRequest, req: Request):
             import httpx
             try:
                 base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
-                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0), verify=not skip_verify) as client:
                     response = await client.get(f"{base_url}/v1/models")
                     if response.status_code == 200:
                         result = response.json()
@@ -1210,6 +1224,7 @@ async def chat(request: ChatRequest, req: Request):
             model_url=connection_manager.ollama_url,
             model_name=model_name,
             use_qwen_rag=use_qwen_rag,
+            skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
         

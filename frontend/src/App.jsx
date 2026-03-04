@@ -16,6 +16,7 @@ function App() {
     const [llmProvider, setLlmProvider] = useState('openai');
     const [ollamaUrl, setOllamaUrl] = useState('http://ollama.fortinet.demo:11434');
     const [ollamaModelName, setOllamaModelName] = useState('gemma3:1B');
+    const [ollamaSkipSslVerify, setOllamaSkipSslVerify] = useState(false);
     const [ollamaModels, setOllamaModels] = useState([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
     const messagesEndRef = useRef(null);
@@ -75,6 +76,7 @@ function App() {
                     if (config.llmProvider) setLlmProvider(config.llmProvider);
                     if (config.ollamaUrl) setOllamaUrl(config.ollamaUrl);
                     if (config.ollamaModelName) setOllamaModelName(config.ollamaModelName);
+                    if (typeof config.ollamaSkipSslVerify === 'boolean') setOllamaSkipSslVerify(config.ollamaSkipSslVerify);
                     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
                         setServerConfigJson(JSON.stringify(config, null, 2));
                         // Also update the UI list of connected servers
@@ -127,7 +129,8 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                ollamaModelName: firstModel
+                                                ollamaModelName: firstModel,
+                                                ollamaSkipSslVerify: ollamaSkipSslVerify
                                             }),
                                         });
                                         console.log(`[FRONTEND] Auto-saved new model: "${firstModel}"`);
@@ -291,7 +294,8 @@ function App() {
                                             ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                             llmProvider: newProvider,
                                             ollamaUrl: ollamaUrl,
-                                            ollamaModelName: ollamaModelName
+                                            ollamaModelName: ollamaModelName,
+                                            ollamaSkipSslVerify: ollamaSkipSslVerify
                                         }),
                                     });
                                 } catch (error) {
@@ -321,7 +325,8 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                ollamaModelName: ollamaModelName
+                                                ollamaModelName: ollamaModelName,
+                                                ollamaSkipSslVerify: ollamaSkipSslVerify
                                             }),
                                         });
                                     } catch (error) {
@@ -331,6 +336,31 @@ function App() {
                                 placeholder="http://ollama.fortinet.demo:11434"
                                     className="w-full bg-gray-900 text-white text-xs rounded p-2 border border-gray-700 focus:border-blue-500 outline-none mb-2"
                             />
+                                <label className="flex items-center gap-2 mb-2 text-xs text-gray-400">
+                                    <input
+                                        type="checkbox"
+                                        checked={ollamaSkipSslVerify}
+                                        onChange={async (e) => {
+                                            const checked = e.target.checked;
+                                            setOllamaSkipSslVerify(checked);
+                                            try {
+                                                await fetch('/api/config', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        mcpServers: {},
+                                                        llmProvider: llmProvider,
+                                                        ollamaUrl: ollamaUrl,
+                                                        ollamaModelName: ollamaModelName,
+                                                        ollamaSkipSslVerify: checked
+                                                    }),
+                                                });
+                                            } catch (err) { console.error(err); }
+                                        }}
+                                        className="rounded border-gray-600 bg-gray-800"
+                                    />
+                                    Skip SSL certificate verification (for self-signed certs)
+                                </label>
                                 <div className="flex items-center gap-2">
                                     <select
                                         value={ollamaModelName}
@@ -345,7 +375,8 @@ function App() {
                                                     ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                     llmProvider: llmProvider,
                                                     ollamaUrl: ollamaUrl,
-                                                    ollamaModelName: newModel
+                                                    ollamaModelName: newModel,
+                                                    ollamaSkipSslVerify: ollamaSkipSslVerify
                                                 };
                                                 console.log(`[FRONTEND] Sending config update with ollamaModelName: "${newModel}"`, configPayload);
                                                 await fetch('/api/config', {
@@ -427,7 +458,8 @@ function App() {
                                                 ...(keyToSend !== undefined ? { openaiApiKey: keyToSend } : {}),
                                                 llmProvider: llmProvider,
                                                 ollamaUrl: ollamaUrl,
-                                                ollamaModelName: ollamaModelName
+                                                ollamaModelName: ollamaModelName,
+                                                ollamaSkipSslVerify: ollamaSkipSslVerify
                                             }),
                                         });
                                     } catch (error) {

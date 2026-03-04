@@ -412,7 +412,7 @@ def _normalize_ollama_base_url(url: str) -> str:
     return base.rstrip("/")
 
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "") -> str:
+async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "", skip_ssl_verify: bool = False) -> str:
     """
     Queries a local Ollama instance via the OpenAI-compatible /v1/chat/completions API.
     
@@ -421,6 +421,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         system_prompt: System prompt to use
         model_url: Ollama server URL
         model_name: Model name to use
+        skip_ssl_verify: If True, disable TLS certificate verification (for self-signed/internal certs)
     """
     if not model_url:
         return "Error: Ollama URL is not set."
@@ -451,7 +452,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
 
         # Check if model is already loaded (Ollama-specific, optional)
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as check_client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), verify=not skip_ssl_verify) as check_client:
                 ps_response = await check_client.get(f"{base_url}/api/ps")
                 if ps_response.status_code == 200:
                     ps_data = ps_response.json()
@@ -468,9 +469,11 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
         print(f"[{get_timestamp()}] [LLM] Sending request to Ollama via OpenAI spec (base: {openai_base})...")
         print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
 
+        http_client = httpx.AsyncClient(verify=not skip_ssl_verify) if skip_ssl_verify else None
         client = AsyncOpenAI(
             base_url=openai_base,
             api_key="ollama",  # required by client but ignored by Ollama
+            http_client=http_client,
         )
 
         # Retry logic for 404 (model loading)
@@ -517,7 +520,7 @@ import time
 LAST_REQUEST_TIME = 0
 RATE_LIMIT_INTERVAL = 15  # 15 seconds (4 requests/min) to be safe under 5 RPM limit
 
-async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "", use_qwen_rag: bool = False, user_query: str = "") -> str:
+async def query_llm(messages: list, tools: list = None, api_key: str = None, provider: str = "openai", model_url: str = None, model_name: str = "", use_qwen_rag: bool = False, user_query: str = "", skip_ssl_verify: bool = False) -> str:
     """
     Queries the selected LLM provider.
     
@@ -529,6 +532,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
         model_url: URL for Ollama instance
         model_name: Model name for Ollama (e.g., qwen3:8b, gemma3:8b)
         use_qwen_rag: If True, use the new Qwen RAG approach (fixed prompt + retrieved tools)
+        skip_ssl_verify: If True, disable TLS cert verification for Ollama (self-signed/internal certs)
     """
     global LAST_REQUEST_TIME
     
@@ -619,7 +623,7 @@ async def query_llm(messages: list, tools: list = None, api_key: str = None, pro
                 # No tools available - emphasize conversational response
                 ollama_system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
             
-            return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name)
+            return await query_ollama(messages, ollama_system_prompt, model_url, model_name=model_name, skip_ssl_verify=skip_ssl_verify)
 
     # Construct the full prompt including system instructions (for OpenAI)
     current_date, current_datetime = get_current_date()
