@@ -23,7 +23,7 @@ def format_duration(start_time: float) -> str:
         return f"{duration:.2f}s"
 
 from .mcp_client import connection_manager, parse_server_route, parse_all_server_routes
-from .llm_service import query_llm, parse_llm_response
+from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url
 
 app = FastAPI()
 
@@ -31,6 +31,21 @@ app = FastAPI()
 COMMIT_TOOLS = ["booking__create_itinerary"]
 PENDING_APPROVAL_MARKER = "PENDING_APPROVAL"
 CONFIRMATION_CODE = "12345"
+
+# Phrase patterns: user is asking something new, not replying to approval prompt
+NEW_QUESTION_PREFIXES = ("tell me", "what is", "what are", "what do", "how does", "how do", "who is", "who are", "explain", "describe", "can you tell", "do you know")
+
+
+def looks_like_new_unrelated_question(msg: str) -> bool:
+    """True if message looks like a new question, not a reply to approval (code/cancel)."""
+    s = (msg or "").strip().lower()
+    if not s:
+        return False
+    if s == CONFIRMATION_CODE or s.isdigit():
+        return False
+    if s in ("cancel", "no", "nevermind", "never mind", "forget it"):
+        return False
+    return any(s.startswith(p) for p in NEW_QUESTION_PREFIXES)
 
 
 def extract_pending_approval_from_messages(messages: list) -> Optional[dict]:
@@ -122,25 +137,20 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
     # Get model name from connection_manager (ensure it's loaded from config)
     model_name = connection_manager.ollama_model_name
     if not model_name or model_name.strip() == "":
-        # Fetch available models and use the first one
+        # Fetch available models and use the first one (OpenAI spec /v1/models)
         import httpx
         try:
-            base_url = connection_manager.ollama_url
-            if base_url.endswith("/api/chat"):
-                base_url = base_url[:-9]
-            if base_url.endswith("/"):
-                base_url = base_url[:-1]
+            base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                response = await client.get(f"{base_url}/api/tags")
+                response = await client.get(f"{base_url}/v1/models")
                 if response.status_code == 200:
                     result = response.json()
-                    if "models" in result and len(result["models"]) > 0:
-                        # Get first model and normalize name
-                        first_model = result["models"][0].get("name", "")
+                    data = result.get("data", [])
+                    if data:
+                        first_model = data[0].get("id", "")
                         if ":" in first_model:
                             parts = first_model.split(":")
-                            if len(parts) >= 2:
-                                first_model = ":".join(parts[:2])
+                            first_model = ":".join(parts[:2]) if len(parts) >= 2 else first_model
                         model_name = first_model
                         print(f"[{get_timestamp()}] [MCP_SAMPLING] No model configured, using first available: '{model_name}'")
                     else:
@@ -279,95 +289,68 @@ async def health_check():
 async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
     """
     Preloads an Ollama model into memory to avoid cold-start delays.
-    Uses keep_alive=-1 to keep the model loaded indefinitely.
+    Uses OpenAI-compatible /v1/chat/completions with a minimal prompt to warm up the model.
     """
-    import httpx
-    
     request_start = time.time()
     print(f"[{get_timestamp()}] [API] POST /api/ollama/preload request received")
-    
-    # Use provided URL or fall back to configured URL
+
     url = ollama_url or connection_manager.ollama_url
     if not url:
         print(f"[{get_timestamp()}] [API] Error: Ollama URL is not configured")
         return {"error": "Ollama URL is not configured"}
-    
-    # Use provided model name or fall back to configured model
+
     model = model_name or connection_manager.ollama_model_name or ""
-    
-    # Ensure URL doesn't have /api/chat suffix
-    base_url = url
-    if base_url.endswith("/api/chat"):
-        base_url = base_url[:-9]
-    if base_url.endswith("/"):
-        base_url = base_url[:-1]
-    
-    # Ollama API endpoint for generating (used to preload)
-    api_endpoint = f"{base_url}/api/generate"
-    print(f"[{get_timestamp()}] [API] Preloading model '{model}' from: {api_endpoint}")
-    
+    if not model or not model.strip():
+        return {"success": False, "error": "Model name is not configured"}
+
+    base_url = _normalize_ollama_base_url(url)
+    openai_base = f"{base_url}/v1"
+    print(f"[{get_timestamp()}] [API] Preloading model '{model}' via OpenAI spec: {openai_base}")
+
     try:
-        timeout = httpx.Timeout(300.0, connect=10.0)  # Allow time for model loading
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(base_url=openai_base, api_key="ollama")
         http_start = time.time()
-        print(f"[{get_timestamp()}] [API] Sending preload request...")
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # Send a minimal request with keep_alive=-1 to keep model in memory indefinitely
-            payload = {
-                "model": model,
-                "prompt": "",  # Empty prompt just to load the model
-                "keep_alive": -1  # Keep model in memory indefinitely
-            }
-            response = await client.post(api_endpoint, json=payload)
-            http_time = time.time() - http_start
-            print(f"[{get_timestamp()}] [API] Preload response received ({format_duration(http_start)}), status: {response.status_code}")
-            
-            response.raise_for_status()
-            
-            total_time = time.time() - request_start
-            print(f"[{get_timestamp()}] [API] Model '{model}' preloaded successfully (total: {format_duration(request_start)})")
-            
-            return {
-                "success": True,
-                "model": model,
-                "message": f"Model '{model}' has been preloaded and will stay in memory",
-                "preload_time": total_time
-            }
-    except httpx.HTTPStatusError as e:
-        error_body = e.response.text if hasattr(e.response, 'text') else str(e)
-        print(f"[{get_timestamp()}] [API] Ollama HTTP Error during preload: {error_body}")
-        return {"success": False, "error": f"Ollama HTTP Error: {error_body}"}
+        print(f"[{get_timestamp()}] [API] Sending preload request (minimal chat completion)...")
+        await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "."}],
+            max_tokens=1,
+        )
+        total_time = time.time() - request_start
+        print(f"[{get_timestamp()}] [API] Model '{model}' preloaded successfully (total: {format_duration(request_start)})")
+        return {
+            "success": True,
+            "model": model,
+            "message": f"Model '{model}' has been preloaded",
+            "preload_time": total_time,
+        }
     except Exception as e:
-        print(f"[{get_timestamp()}] [API] Error preloading model: {str(e)}")
-        return {"success": False, "error": f"Error preloading model: {str(e)}"}
+        err_msg = str(e)
+        print(f"[{get_timestamp()}] [API] Ollama HTTP Error during preload: {err_msg}")
+        return {"success": False, "error": f"Ollama Error: {err_msg}"}
 
 @app.get("/api/ollama/models")
 async def get_ollama_models(ollama_url: str = None):
     """
-    Fetches the list of available models from Ollama.
+    Fetches the list of available models from Ollama via OpenAI-compatible /v1/models.
     If ollama_url is not provided, uses the configured URL from connection_manager.
     """
     import httpx
-    
+
     request_start = time.time()
     print(f"[{get_timestamp()}] [API] GET /api/ollama/models request received")
-    
-    # Use provided URL or fall back to configured URL
+
     url = ollama_url or connection_manager.ollama_url
     if not url:
         print(f"[{get_timestamp()}] [API] Error: Ollama URL is not configured")
         return {"error": "Ollama URL is not configured"}
-    
-    # Ensure URL doesn't have /api/chat suffix
-    base_url = url
-    if base_url.endswith("/api/chat"):
-        base_url = base_url[:-9]
-    if base_url.endswith("/"):
-        base_url = base_url[:-1]
-    
-    # Ollama API endpoint for listing models
-    api_endpoint = f"{base_url}/api/tags"
-    print(f"[{get_timestamp()}] [API] Fetching models from: {api_endpoint}")
-    
+
+    base_url = _normalize_ollama_base_url(url)
+    api_endpoint = f"{base_url}/v1/models"
+    print(f"[{get_timestamp()}] [API] Fetching models from: {api_endpoint} (OpenAI spec)")
+
     try:
         timeout = httpx.Timeout(10.0, connect=5.0)
         http_start = time.time()
@@ -376,47 +359,38 @@ async def get_ollama_models(ollama_url: str = None):
             response = await client.get(api_endpoint)
             http_time = time.time() - http_start
             print(f"[{get_timestamp()}] [API] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
-            
+
             response.raise_for_status()
-            
-            # Track JSON parsing time
+
             parse_start = time.time()
             result = response.json()
             parse_time = time.time() - parse_start
             if parse_time > 0.01:
                 print(f"[{get_timestamp()}] [API] JSON parsed ({format_duration(parse_start)})")
-            
-            # Extract model names from Ollama response
-            process_start = time.time()
+
             models = []
-            if "models" in result:
-                print(f"[{get_timestamp()}] [API] Raw Ollama models response: {[m.get('name', '') for m in result['models']]}")
-                for model in result["models"]:
-                    model_name = model.get("name", "")
-                    original_name = model_name
-                    # Remove any tags (e.g., "qwen3:8b" from "qwen3:8b:latest")
-                    if ":" in model_name:
-                        # Keep the tag part (e.g., "qwen3:8b")
-                        parts = model_name.split(":")
-                        if len(parts) >= 2:
-                            model_name = ":".join(parts[:2])
-                    if original_name != model_name:
-                        print(f"[{get_timestamp()}] [API] Normalized model name: '{original_name}' -> '{model_name}'")
+            data = result.get("data", [])
+            if data:
+                print(f"[{get_timestamp()}] [API] Raw models response: {[m.get('id', '') for m in data]}")
+                for model in data:
+                    model_id = model.get("id", "")
+                    original_id = model_id
+                    if ":" in model_id:
+                        parts = model_id.split(":")
+                        model_id = ":".join(parts[:2]) if len(parts) >= 2 else model_id
+                    if original_id != model_id:
+                        print(f"[{get_timestamp()}] [API] Normalized model name: '{original_id}' -> '{model_id}'")
                     models.append({
-                        "name": model_name,
-                        "full_name": model.get("name", ""),
+                        "name": model_id,
+                        "full_name": original_id,
                         "size": model.get("size", 0),
-                        "modified_at": model.get("modified_at", "")
+                        "modified_at": model.get("created", ""),
                     })
                 print(f"[{get_timestamp()}] [API] Processed model names: {[m['name'] for m in models]}")
-            
-            process_time = time.time() - process_start
-            if process_time > 0.01:
-                print(f"[{get_timestamp()}] [API] Processed {len(models)} models ({format_duration(process_start)})")
-            
+
             total_time = time.time() - request_start
             print(f"[{get_timestamp()}] [API] GET /api/ollama/models completed (total: {format_duration(request_start)})")
-            
+
             return {"models": models, "error": None}
     except httpx.HTTPStatusError as e:
         error_body = e.response.text if hasattr(e.response, 'text') else str(e)
@@ -671,22 +645,28 @@ async def chat(request: ChatRequest, req: Request):
                 last_user_content = msg.get("content", "") or ""
                 break
         msg_stripped = last_user_content.strip()
-        print(f"[{get_timestamp()}] [APPROVAL] Found PENDING_APPROVAL for {pending.get('tool')}, last user message: {msg_stripped[:80]}...", flush=True)
+        # User asking something new (e.g. "tell me about Fortinet") -> skip approval, process normally
+        if looks_like_new_unrelated_question(msg_stripped):
+            print(f"[{get_timestamp()}] [APPROVAL] Skipping - user asked new question, not replying to approval", flush=True)
+            pending = None
+        else:
+            print(f"[{get_timestamp()}] [APPROVAL] Found PENDING_APPROVAL for {pending.get('tool')}, last user message: {msg_stripped[:80]}...", flush=True)
+    if pending:
         model_name = connection_manager.ollama_model_name or ""
         if not model_name or not model_name.strip():
             import httpx
             try:
-                base_url = connection_manager.ollama_url or ""
-                if base_url.endswith("/api/chat"):
-                    base_url = base_url[:-9]
-                if base_url.endswith("/"):
-                    base_url = base_url[:-1]
+                base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
                 async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                    resp = await client.get(f"{base_url}/api/tags")
-                    if resp.status_code == 200 and resp.json().get("models"):
-                        m = resp.json()["models"][0].get("name", "qwen2.5/coder:1.5b")
-                        model_name = ":".join(m.split(":")[:2]) if ":" in m else m
+                    resp = await client.get(f"{base_url}/v1/models")
+                    if resp.status_code == 200:
+                        data = resp.json().get("data", [])
+                        if data:
+                            m = data[0].get("id", "qwen2.5/coder:1.5b")
+                            model_name = ":".join(m.split(":")[:2]) if ":" in m else m
             except Exception:
+                pass
+            if not model_name or not model_name.strip():
                 model_name = "qwen2.5/coder:1.5b"
         # Code in wall prompt; main LLM decides (tool call = approve, text = reject). Single-LLM injection lab.
         import json as _json
@@ -1037,6 +1017,29 @@ async def chat(request: ChatRequest, req: Request):
         
         # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
+        
+        # Meta-question: "what tools available?" -> text-only, list tools (no tool call)
+        # Works for @booking, @weather, any @server - prevents LLM from incorrectly calling a tool
+        msg_low = user_message.lower()
+        is_tools_meta_question = (
+            ("tool" in msg_low or "tools" in msg_low)
+            and any(k in msg_low for k in ["available", "list", "what", "which", "show", "can you use"])
+        )
+        if is_tools_meta_question and tools and ("@" in user_message):
+            tool_list = "\n".join(
+                f"- **{t.get('name', '')}**: {t.get('description', 'No description')[:120]}"
+                for t in tools
+            )
+            current_messages.append({
+                "role": "user",
+                "content": (
+                    f"The user asked what tools are available. Here are the tools for this server:\n{tool_list}\n\n"
+                    "Respond with plain TEXT only. List these tools in a friendly way. Do NOT call any tool. Do NOT output JSON."
+                ),
+            })
+            tools_to_send = []
+            print(f"[{get_timestamp()}] [META] Tools list question detected - responding with text only (no tool call)", flush=True)
+        
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
         if has_booking_tools and "@booking" in user_message.lower():
             msg_low = user_message.lower()
@@ -1165,25 +1168,20 @@ async def chat(request: ChatRequest, req: Request):
         model_name = connection_manager.ollama_model_name
         print(f"[{get_timestamp()}] [DEBUG] Using Ollama model from config: '{model_name}' (provider: {connection_manager.llm_provider})")
         if not model_name or model_name.strip() == "":
-            # Fetch available models and use the first one
+            # Fetch available models and use the first one (OpenAI spec /v1/models)
             import httpx
             try:
-                base_url = connection_manager.ollama_url
-                if base_url.endswith("/api/chat"):
-                    base_url = base_url[:-9]
-                if base_url.endswith("/"):
-                    base_url = base_url[:-1]
+                base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
                 async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                    response = await client.get(f"{base_url}/api/tags")
+                    response = await client.get(f"{base_url}/v1/models")
                     if response.status_code == 200:
                         result = response.json()
-                        if "models" in result and len(result["models"]) > 0:
-                            # Get first model and normalize name
-                            first_model = result["models"][0].get("name", "")
+                        data = result.get("data", [])
+                        if data:
+                            first_model = data[0].get("id", "")
                             if ":" in first_model:
                                 parts = first_model.split(":")
-                                if len(parts) >= 2:
-                                    first_model = ":".join(parts[:2])
+                                first_model = ":".join(parts[:2]) if len(parts) >= 2 else first_model
                             model_name = first_model
                             print(f"[{get_timestamp()}] [WARNING] No model configured, using first available: '{model_name}'")
                         else:

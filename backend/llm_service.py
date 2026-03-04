@@ -403,9 +403,18 @@ def format_tool_registry(tools: List[dict]) -> str:
 
     return "\n".join(registry)
 
+def _normalize_ollama_base_url(url: str) -> str:
+    """Normalize Ollama URL to base (no path)."""
+    base = url.strip()
+    for suffix in ["/api/chat", "/api/generate", "/v1", "/v1/"]:
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+    return base.rstrip("/")
+
+
 async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "") -> str:
     """
-    Queries a local Ollama instance.
+    Queries a local Ollama instance via the OpenAI-compatible /v1/chat/completions API.
     
     Args:
         messages: List of message dicts
@@ -418,19 +427,8 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     
     if not model_name or model_name.strip() == "":
         return "Error: Model name is not set. Please select a model in the settings."
-        
-    # Use /api/chat endpoint. Ollama applies the model's chat template internally.
-    api_endpoint = model_url
-    if not api_endpoint.endswith("/api/chat"):
-        if api_endpoint.endswith("/"):
-            api_endpoint += "api/chat"
-        else:
-            api_endpoint += "/api/chat"
-            
-    print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
-    print(f"[{get_timestamp()}] DEBUG: Using /api/chat endpoint")
 
-    # Build plain chat messages (no manual template tokens)
+    # Build OpenAI-format messages
     ollama_messages = [{"role": "system", "content": system_prompt}]
     for msg in messages:
         role = msg.get("role")
@@ -440,35 +438,21 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
             role = "assistant"
         ollama_messages.append({"role": role, "content": msg.get("content", "")})
 
-    payload = {
-        "model": model_name,
-        "messages": ollama_messages,
-        "stream": False,
-        "keep_alive": "10m",
-        "options": {"temperature": 0}
-    }
-    
-    # Log payload size for debugging
-    import json as json_module
-    payload_size = len(json_module.dumps(payload))
     total_chars = sum(len(str(msg.get("content", ""))) for msg in ollama_messages)
-    print(f"[{get_timestamp()}] [LLM] Payload size: {payload_size} bytes, Total prompt/message chars: {total_chars}")
-    
+    print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
+    print(f"[{get_timestamp()}] [LLM] Using OpenAI-compatible /v1/chat/completions API")
+    print(f"[{get_timestamp()}] [LLM] Total prompt/message chars: {total_chars}")
+
+    base_url = _normalize_ollama_base_url(model_url)
+    openai_base = f"{base_url}/v1"
+
     try:
-        # Check if model is already loaded before making request
-        base_url = model_url
-        if base_url.endswith("/api/chat"):
-            base_url = base_url[:-9]
-        elif base_url.endswith("/api/generate"):
-            base_url = base_url[:-13]
-        if base_url.endswith("/"):
-            base_url = base_url[:-1]
-        ps_endpoint = f"{base_url}/api/ps"
-        
+        from openai import AsyncOpenAI
+
+        # Check if model is already loaded (Ollama-specific, optional)
         try:
-            check_start = time.time()
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as check_client:
-                ps_response = await check_client.get(ps_endpoint)
+                ps_response = await check_client.get(f"{base_url}/api/ps")
                 if ps_response.status_code == 200:
                     ps_data = ps_response.json()
                     models_loaded = ps_data.get("models", [])
@@ -477,121 +461,55 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
                         print(f"[{get_timestamp()}] [LLM] ✓ Model '{model_name}' is already loaded in memory")
                     else:
                         print(f"[{get_timestamp()}] [LLM] ⚠️  Model '{model_name}' is NOT loaded - will need to load from disk (~4s delay)")
-                else:
-                    print(f"[{get_timestamp()}] [LLM] Could not check model status (status: {ps_response.status_code})")
         except Exception as e:
             print(f"[{get_timestamp()}] [LLM] Could not check if model is loaded: {e}")
-        
-        # Increase timeout to 300s (5 mins) because loading a model for the first time can be slow
-        timeout = httpx.Timeout(300.0, connect=10.0)
+
         request_start = time.time()
-        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama (endpoint: {api_endpoint})...")
-        
-        # Track connection establishment time
-        connect_start = time.time()
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            connect_time = time.time() - connect_start
-            if connect_time > 0.1:
-                print(f"[{get_timestamp()}] [LLM] HTTP client created ({format_duration(connect_start)})")
-            
-            # Track actual HTTP request time
-            http_start = time.time()
-            print(f"[{get_timestamp()}] [LLM] HTTP POST request initiated...")
-            print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
-            
-            # Retry logic for 404 errors (model might not be loaded yet)
-            max_retries = 2  # Initial attempt + 1 retry
-            retry_count = 0
-            response = None
-            
-            while retry_count < max_retries:
-                try:
-                    response = await client.post(api_endpoint, json=payload)
-                    http_time = time.time() - http_start
-                    print(f"[{get_timestamp()}] [LLM] HTTP response received ({format_duration(http_start)}), status: {response.status_code}")
-                    
-                    # If 404, retry after 5 seconds
-                    if response.status_code == 404:
-                        if retry_count < max_retries - 1:
-                            retry_count += 1
-                            print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404 error, retrying in 5 seconds (attempt {retry_count + 1}/{max_retries})...")
-                            await asyncio.sleep(5)
-                            http_start = time.time()  # Reset timer for retry
-                            continue
-                        else:
-                            # Last attempt failed
-                            response.raise_for_status()
-                    else:
-                        # Success or other error - break out of retry loop
-                        break
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 404 and retry_count < max_retries - 1:
-                        retry_count += 1
-                        print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404 error, retrying in 5 seconds (attempt {retry_count + 1}/{max_retries})...")
-                        await asyncio.sleep(5)
-                        http_start = time.time()  # Reset timer for retry
-                        continue
-                    else:
-                        raise
-            
-            # Performance analysis
-            http_time = time.time() - http_start
-            if http_time > 60:
-                print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s - model may be loading from disk or underpowered")
-            elif http_time > 30:
-                print(f"[{get_timestamp()}] [LLM] ⚠️  MODERATE: Inference took {http_time:.1f}s - consider model preloading")
-            else:
-                print(f"[{get_timestamp()}] [LLM] ✓ Inference completed in {http_time:.1f}s")
-            
-            response.raise_for_status()
-            
-            # Track JSON parsing time
-            parse_start = time.time()
-            result = response.json()
-            parse_time = time.time() - parse_start
-            if parse_time > 0.1:
-                print(f"[{get_timestamp()}] [LLM] JSON parsed ({format_duration(parse_start)})")
-            
-            total_time = time.time() - request_start
-            print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)}, HTTP wait: {format_duration(http_start)})")
-            
-            # /api/chat returns message.content
-            # Log full response structure for debugging
-            print(f"[{get_timestamp()}] [LLM] Response keys: {list(result.keys())}")
-            if "message" in result:
-                print(f"[{get_timestamp()}] [LLM] Message keys: {list(result['message'].keys()) if isinstance(result.get('message'), dict) else 'not a dict'}")
-            
-            response_content = result.get("message", {}).get("content", "")
-            
-            # If content is empty, check for alternative response formats
-            if not response_content:
-                # Check if response is directly in result
-                if "response" in result:
-                    response_content = result.get("response", "")
-                    print(f"[{get_timestamp()}] [LLM] Found response in 'response' field: {len(response_content)} chars")
-                # Check if done field indicates completion
-                if "done" in result and result.get("done") is True and not response_content:
-                    print(f"[{get_timestamp()}] [LLM] WARNING: Response marked as done but content is empty")
-                    # Log full result for debugging
-                    import json as json_module
-                    print(f"[{get_timestamp()}] [LLM] Full response structure: {json_module.dumps(result, indent=2)[:500]}")
-            
-            if response_content:
-                print(f"[{get_timestamp()}] [LLM] Response content length: {len(response_content)} chars")
-            else:
-                print(f"[{get_timestamp()}] [LLM] WARNING: Response content is empty!")
-                # Log full result for debugging
-                import json as json_module
-                print(f"[{get_timestamp()}] [LLM] Full response: {json_module.dumps(result, indent=2)[:1000]}")
-            
-            return response_content
-    except httpx.HTTPStatusError as e:
-        error_body = e.response.text
-        print(f"Ollama HTTP Error: {error_body}")
-        return f"Ollama Error: {error_body}"
+        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama via OpenAI spec (base: {openai_base})...")
+        print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
+
+        client = AsyncOpenAI(
+            base_url=openai_base,
+            api_key="ollama",  # required by client but ignored by Ollama
+        )
+
+        # Retry logic for 404 (model loading)
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=ollama_messages,
+                    temperature=0,
+                )
+                http_time = time.time() - request_start
+                if http_time > 60:
+                    print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s")
+                elif http_time > 30:
+                    print(f"[{get_timestamp()}] [LLM] ⚠️  MODERATE: Inference took {http_time:.1f}s")
+                else:
+                    print(f"[{get_timestamp()}] [LLM] ✓ Inference completed in {http_time:.1f}s")
+                print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)})")
+                content = response.choices[0].message.content
+                if content:
+                    print(f"[{get_timestamp()}] [LLM] Response content length: {len(content)} chars")
+                else:
+                    print(f"[{get_timestamp()}] [LLM] WARNING: Response content is empty!")
+                return content or ""
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("404" in err_str or "not found" in err_str) and attempt < max_retries - 1:
+                    print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404, retrying in 5 seconds (attempt {attempt + 1}/{max_retries})...")
+                    await asyncio.sleep(5)
+                    continue
+                raise
     except Exception as e:
-        print(f"Ollama Error Details: {repr(e)}")
-        return f"Error communicating with Ollama at {model_url}: {str(e)}"
+        err_msg = str(e)
+        if "401" in err_msg or "403" in err_msg:
+            # OpenAI client may surface auth errors; Ollama ignores api_key
+            pass
+        print(f"Ollama Error: {err_msg}")
+        return f"Error communicating with Ollama at {model_url}: {err_msg}"
 
 import time
 
