@@ -450,26 +450,13 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
     try:
         from openai import AsyncOpenAI
 
-        # Check if model is already loaded (Ollama-specific, optional)
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), verify=not skip_ssl_verify) as check_client:
-                ps_response = await check_client.get(f"{base_url}/api/ps")
-                if ps_response.status_code == 200:
-                    ps_data = ps_response.json()
-                    models_loaded = ps_data.get("models", [])
-                    model_loaded = any(m.get("name", "").startswith(model_name) for m in models_loaded)
-                    if model_loaded:
-                        print(f"[{get_timestamp()}] [LLM] ✓ Model '{model_name}' is already loaded in memory")
-                    else:
-                        print(f"[{get_timestamp()}] [LLM] ⚠️  Model '{model_name}' is NOT loaded - will need to load from disk (~4s delay)")
-        except Exception as e:
-            print(f"[{get_timestamp()}] [LLM] Could not check if model is loaded: {e}")
-
         request_start = time.time()
         print(f"[{get_timestamp()}] [LLM] Sending request to Ollama via OpenAI spec (base: {openai_base})...")
         print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
 
-        http_client = httpx.AsyncClient(verify=not skip_ssl_verify) if skip_ssl_verify else None
+        # Use 10 min timeout for inference (model load + generation can be slow)
+        ollama_timeout = httpx.Timeout(600.0, connect=10.0)
+        http_client = httpx.AsyncClient(verify=not skip_ssl_verify, timeout=ollama_timeout)
         client = AsyncOpenAI(
             base_url=openai_base,
             api_key="ollama",  # required by client but ignored by Ollama
@@ -484,6 +471,7 @@ async def query_ollama(messages: list, system_prompt: str, model_url: str, model
                     model=model_name,
                     messages=ollama_messages,
                     temperature=0,
+                    timeout=600.0,
                 )
                 http_time = time.time() - request_start
                 if http_time > 60:

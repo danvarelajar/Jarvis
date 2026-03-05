@@ -318,7 +318,8 @@ async def preload_ollama_model(ollama_url: str = None, model_name: str = None):
         from openai import AsyncOpenAI
         import httpx
 
-        http_client = httpx.AsyncClient(verify=not skip_verify) if skip_verify else None
+        ollama_timeout = httpx.Timeout(600.0, connect=10.0)
+        http_client = httpx.AsyncClient(verify=not skip_verify, timeout=ollama_timeout)
         client = AsyncOpenAI(base_url=openai_base, api_key="ollama", http_client=http_client)
         http_start = time.time()
         print(f"[{get_timestamp()}] [API] Sending preload request (minimal chat completion)...")
