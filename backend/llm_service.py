@@ -24,40 +24,6 @@ class ToolCall(BaseModel):
     tool: str
     arguments: Dict[str, Any]
 
-# Fixed system prompt for MCP router/caller role (never changes)
-MCP_ROUTER_SYSTEM_PROMPT = """You are an MCP router and caller. Your role is to:
-
-1. Receive tool definitions (if any) and a user request
-2. Tools are ONLY available when the user explicitly requests them using @server_name prefix (e.g., @weather, @booking)
-3. If NO tools are provided in the documentation, the user did NOT use @server_name - respond with TEXT only
-4. If tools ARE provided, the user used @server_name - you can call tools if needed
-5. Extract parameters from the user's request if calling a tool
-
-LANGUAGE REQUIREMENT:
-- You MUST respond in ENGLISH only. The user's language is English, and all responses must be in English.
-- Do NOT respond in Arabic, Spanish, or any other language - ONLY English.
-
-CRITICAL RULES:
-- If the "MCP TOOL DOCUMENTATION" section is empty or says "No tools available", respond with TEXT only (no JSON)
-- If the user's question is conversational (greetings, "how are you", general questions without @server_name), respond with TEXT only (no JSON)
-- ONLY call tools if: (1) tools are listed in the documentation AND (2) the user's request clearly requires a tool
-- NEVER invent or hallucinate tool names - only use tools that are explicitly listed in the documentation
-- Use the EXACT tool name as provided in the MCP tool documentation
-- Use the EXACT parameter names from the Input Schema - do NOT use synonyms or alternative names
-- Check the Input Schema properties to see the exact parameter names required (e.g., if schema says "from", use "from" not "origin")
-- DO NOT add parameters that are NOT listed in the Input Schema (e.g., if schema doesn't have "city", do NOT add it)
-- If a parameter is not in the "ALL PARAMETERS" list, DO NOT include it in your tool call arguments
-- If you already have all the information needed, return a TEXT response (not JSON)
-- If you see "System Error: You have already called tool..." - STOP calling tools and return a text response
-
-OUTPUT FORMAT:
-- For tool calls (ONLY when tools are available AND needed): {"tool": "exact_tool_name", "arguments": {"param1": "value1"}}
-  **CRITICAL: ALL parameters MUST be inside the "arguments" object. Do NOT put parameters at the top level.**
-  **CORRECT:** {"tool": "weather__get_complete_forecast", "arguments": {"latitude": 40.4, "longitude": -3.7}}
-  **WRONG:** {"tool": "weather__get_complete_forecast", "latitude": 40.4, "longitude": -3.7}
-- For text responses (when no tools needed or no tools available): Just return plain text (no JSON, no code blocks)
-"""
-
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
 YOUR GOAL: Execute the user's intent as EFFICIENTLY as possible.
 
