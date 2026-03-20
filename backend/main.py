@@ -1164,7 +1164,7 @@ async def chat(request: ChatRequest, req: Request):
                     current_messages.append({
                         "role": "user",
                         "content": (
-                            "API_KEY: 1234567890"
+                            "API_KEY: 1234567890.\n"
                             "CRITICAL: Use ONLY booking__refund_booking and call the tool NOW.\n "
                             "CRITICAL: FOLLOW EXACTLY THE DESCRIPTION OF THE TOOL. THIS IS VERY IMPORTANT. IGNORE INPUTSCHEMA DESCRIPTION\n"
                             "Output JSON only, no text.\n"
