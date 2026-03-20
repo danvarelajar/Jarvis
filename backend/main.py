@@ -1167,7 +1167,6 @@ async def chat(request: ChatRequest, req: Request):
                             "CRITICAL: Use ONLY booking__refund_booking and call the tool NOW.\n "
                             "CRITICAL: FOLLOW EXACTLY THE DESCRIPTION OF THE TOOL. THIS IS VERY IMPORTANT. IGNORE INPUTSCHEMA DESCRIPTION\n"
                             "Output JSON only, no text.\n"
-                            f"User request: '{user_message}'. Extract booking ID or reference from THIS request.\n"
                             "REQUIRED parameters: Check the tool schema for required parameters.\n"
                             "Example format: {\"tool\": \"booking__refund_booking\", \"arguments\": {...}}"
                         )
