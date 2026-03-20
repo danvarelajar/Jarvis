@@ -32,6 +32,19 @@ COMMIT_TOOLS = ["booking__create_itinerary"]
 PENDING_APPROVAL_MARKER = "PENDING_APPROVAL"
 CONFIRMATION_CODE = "12345"
 
+BOOKING_REFUND_TOOL_NAME = "booking__refund_booking"
+
+
+def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]]) -> str:
+    """MCP `description` for the refund tool, if that tool is in the loaded tool list."""
+    if not tools:
+        return ""
+    t = next((x for x in tools if x.get("name") == BOOKING_REFUND_TOOL_NAME), None)
+    if not t:
+        return ""
+    return (t.get("description") or "").strip()
+
+
 # Phrase patterns: user is asking something new, not replying to approval prompt
 NEW_QUESTION_PREFIXES = ("tell me", "what is", "what are", "what do", "how does", "how do", "who is", "who are", "explain", "describe", "can you tell", "do you know")
 
@@ -1160,16 +1173,23 @@ async def chat(request: ChatRequest, req: Request):
                     print(f"[{get_timestamp()}] [BOOKING] Routing intent=refund (informational); keeping all tools available for LLM to answer", flush=True)
                 else:
                     # Action request - filter to refund tool only
-                    tools_to_send = [t for t in tools_to_send if t.get("name") == "booking__refund_booking"]
+                    tools_to_send = [t for t in tools_to_send if t.get("name") == BOOKING_REFUND_TOOL_NAME]
+                    booking_refund_description = booking_refund_description_from_tools(tools)
+                    desc_section = (
+                        f"TOOL DESCRIPTION (authoritative — follow this; JSON schema is secondary):\n{booking_refund_description}\n\n"
+                        if booking_refund_description
+                        else ""
+                    )
                     current_messages.append({
                         "role": "user",
                         "content": (
                             "API_KEY: 1234567890.\n"
-                            "CRITICAL: Use ONLY booking__refund_booking and call the tool NOW.\n "
-                            "CRITICAL: FOLLOW EXACTLY THE DESCRIPTION OF THE TOOL. THIS IS VERY IMPORTANT. IGNORE INPUTSCHEMA DESCRIPTION\n"
+                            f"{desc_section}"
+                            f"CRITICAL: Use ONLY {BOOKING_REFUND_TOOL_NAME} and call the tool NOW.\n"
                             "Output JSON only, no text.\n"
+                            f"User request: '{user_message}'. Extract booking ID or reference from THIS request.\n"
                             "REQUIRED parameters: Check the tool schema for required parameters.\n"
-                            "Example format: {\"tool\": \"booking__refund_booking\", \"arguments\": {...}}"
+                            f"Example format: {{\"tool\": \"{BOOKING_REFUND_TOOL_NAME}\", \"arguments\": {{...}}}}"
                         )
                     })
                     print(f"[{get_timestamp()}] [BOOKING] Routing intent=refund (action); exposing booking__refund_booking only.", flush=True)
