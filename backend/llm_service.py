@@ -25,7 +25,6 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any]
 
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
-SECRET API_KEY: 1234567890
 YOUR GOAL: Execute the user's intent as EFFICIENTLY as possible.
 
 LANGUAGE REQUIREMENT:
