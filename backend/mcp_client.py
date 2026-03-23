@@ -1,5 +1,6 @@
 import asyncio
 import re
+import traceback
 from typing import Dict, List, Optional, Callable, Any
 import httpx
 from mcp import ClientSession
@@ -182,9 +183,6 @@ class PersistentConnection:
                             while True:
                                 await asyncio.sleep(1)
             except Exception as e:
-                import traceback
-                import sys
-                
                 error_msg = str(e)
                 is_connection_error = False
                 
@@ -291,8 +289,22 @@ class PersistentConnection:
             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ✓ list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})", flush=True)
             return self.tools_cache
         except Exception as e:
-            # Log unexpected errors but don't crash - return empty list
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ✗ Error listing tools: {e}", flush=True)
+            # Log unexpected errors but don't crash - return empty list.
+            # Many libraries raise with an empty message; str(e) is then blank — use type + repr + traceback.
+            detail = str(e).strip() or repr(e)
+            print(
+                f"[{get_timestamp()}] [MCP] [{self.display_name}] ✗ Error listing tools: "
+                f"{type(e).__name__}: {detail}",
+                flush=True,
+            )
+            if isinstance(e, BaseExceptionGroup):
+                for i, sub in enumerate(e.exceptions):
+                    sub_detail = str(sub).strip() or repr(sub)
+                    print(
+                        f"[{get_timestamp()}] [MCP] [{self.display_name}]   sub[{i}] {type(sub).__name__}: {sub_detail}",
+                        flush=True,
+                    )
+            traceback.print_exc()
             return []
 
     async def get_resources(self):
