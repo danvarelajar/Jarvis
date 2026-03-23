@@ -620,7 +620,7 @@ async def chat(request: ChatRequest, req: Request):
     # We need the LLM to know what servers exist so it can tell the user:
     # "I can't do that yet. Try typing '@fabricstudio ...'"
     # 3. Agent Loop
-    # We allow up to 20 turns to prevent infinite loops
+    # Hard cap on turns to prevent runaway LLM/tool loops
     # If no tools are loaded, give the model a hint about how to enable them.
     # Use all messages from request (frontend manages history reset between requests)
     current_messages = request.messages.copy() if request.messages else []
@@ -780,7 +780,8 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[{get_timestamp()}] [APPROVAL] LLM rejected: {str(final)[:80]}...", flush=True)
             return {"role": "assistant", "content": final}
 
-    for turn_index in range(20):
+    MAX_AGENT_TURNS = 10
+    for turn_index in range(MAX_AGENT_TURNS):
         # PACING: Handled by llm_service.py globally now
         turn_start = time.time()
         print(f"\n[{get_timestamp()}] --- [Turn {turn_index + 1}] Processing ---")
@@ -2065,7 +2066,7 @@ async def chat(request: ChatRequest, req: Request):
                 return {"role": "assistant", "content": f"Error executing tool: {str(e)}"}
     
     # Construct a debug summary to help the user understand why it looped
-    debug_summary = "Error: Maximum agent turns reached (20). check backend logs for more details.\n\nLoop Trace (Last 3 Turns):\n"
+    debug_summary = f"Error: Maximum agent turns reached ({MAX_AGENT_TURNS}). check backend logs for more details.\n\nLoop Trace (Last 3 Turns):\n"
     
     # Get the last few messages to show what the agent was trying to do
     # We filter for assistant tool calls or user tool results to be most helpful
