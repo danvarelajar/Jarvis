@@ -2,5 +2,5 @@ fastapi
 uvicorn
 httpx
 pydantic
-mcp
+mcp>=1.26.0
 openai
