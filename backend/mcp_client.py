@@ -2,6 +2,8 @@ import asyncio
 import re
 import traceback
 from typing import Dict, List, Optional, Callable, Any
+
+import anyio
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -22,6 +24,15 @@ except ImportError:  # pragma: no cover - older mcp
 
 import time
 from datetime import datetime
+
+
+def _is_transport_closed_error(exc: BaseException) -> bool:
+    """True when MCP memory streams are closed, including when wrapped in ExceptionGroup."""
+    if isinstance(exc, (anyio.ClosedResourceError, anyio.BrokenResourceError)):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_is_transport_closed_error(x) for x in exc.exceptions)
+    return False
 
 
 def _mcp_httpx_client_factory(*, verify: bool):
@@ -190,7 +201,16 @@ class PersistentConnection:
                 def check_connection_error(exc):
                     msg = str(exc).lower()
                     name = type(exc).__name__
-                    return "ConnectError" in name or "os error" in msg or "connection refused" in msg or "connect call failed" in msg or "session terminated" in msg
+                    if "ConnectError" in name or "RemoteProtocolError" in name:
+                        return True
+                    if "incomplete chunked read" in msg or "peer closed connection" in msg:
+                        return True
+                    return (
+                        "os error" in msg
+                        or "connection refused" in msg
+                        or "connect call failed" in msg
+                        or "session terminated" in msg
+                    )
 
                 # Recursively flatten exceptions
                 def get_all_exceptions(exc):
@@ -289,6 +309,18 @@ class PersistentConnection:
             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ✓ list_tools() -> {len(self.tools_cache)} tools ({format_duration(list_start)})", flush=True)
             return self.tools_cache
         except Exception as e:
+            if _is_transport_closed_error(e):
+                print(
+                    f"[{get_timestamp()}] [MCP] [{self.display_name}] list_tools: transport closed "
+                    f"({type(e).__name__}); clearing session — background task will reconnect",
+                    flush=True,
+                )
+                self.session = None
+                self.tools_cache = None
+                self.tools_cache_timestamp = 0
+                self.resources_cache = None
+                self.prompts_cache = None
+                return []
             # Log unexpected errors but don't crash - return empty list.
             # Many libraries raise with an empty message; str(e) is then blank — use type + repr + traceback.
             detail = str(e).strip() or repr(e)
@@ -703,6 +735,21 @@ class GlobalConnectionManager:
             print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> TimeoutError: {error_msg} ({format_duration(call_start)})")
             raise TimeoutError(error_msg)
         except Exception as e:
+            if _is_transport_closed_error(e):
+                print(
+                    f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> "
+                    f"{type(e).__name__} (transport closed; clearing session and tool cache)",
+                    flush=True,
+                )
+                conn.session = None
+                conn.tools_cache = None
+                conn.tools_cache_timestamp = 0
+                conn.resources_cache = None
+                conn.prompts_cache = None
+                raise RuntimeError(
+                    f"MCP connection to '{conn.display_name}' was lost (SSE/stream closed). "
+                    "Wait for reconnect or use Connect again."
+                ) from e
             print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)} ({format_duration(call_start)})")
             raise
 
