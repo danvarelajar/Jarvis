@@ -236,7 +236,8 @@ function App() {
                         server_name: name,
                         url: details.url,
                         headers: details.headers,
-                        transport: details.transport || 'sse'
+                        transport: details.transport || 'sse',
+                        skip_ssl_verify: !!(details.skipSslVerify || details.skip_ssl_verify),
                     }),
                 });
                 return name;

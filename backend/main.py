@@ -106,6 +106,7 @@ class ConnectRequest(BaseModel):
     url: str
     headers: Optional[Dict[str, str]] = None
     transport: str = "sse"
+    skip_ssl_verify: bool = False
 
 # Sampling Handler
 async def handle_sampling_message(params: types.CreateMessageRequestParams) -> types.CreateMessageResult:
@@ -221,7 +222,14 @@ async def startup_event():
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):
-    await connection_manager.add_server(request.server_name, request.url, request.headers, request.transport, save=True)
+    await connection_manager.add_server(
+        request.server_name,
+        request.url,
+        request.headers,
+        request.transport,
+        save=True,
+        skip_ssl_verify=request.skip_ssl_verify,
+    )
     return {"status": "connected", "server": request.server_name}
 
 @app.get("/api/config")
@@ -244,7 +252,8 @@ async def get_config():
         config["mcpServers"][display_name] = {
             "url": conn.url,
             "headers": conn.headers,
-            "transport": conn.transport
+            "transport": conn.transport,
+            "skipSslVerify": conn.skip_ssl_verify,
         }
     return config
 
@@ -291,12 +300,14 @@ async def update_config(request: ConfigRequest):
     connection_manager.save_config()
 
     for name, details in request.mcpServers.items():
+        skip_tls = bool(details.get("skipSslVerify") or details.get("skip_ssl_verify"))
         await connection_manager.add_server(
-            name, 
-            details["url"], 
-            details.get("headers"), 
+            name,
+            details["url"],
+            details.get("headers"),
             details.get("transport", "sse"),
-            save=True
+            save=True,
+            skip_ssl_verify=skip_tls,
         )
     return {"status": "updated", "count": len(request.mcpServers)}
 

@@ -13,8 +13,36 @@ from mcp.types import CreateMessageResult
 
 from mcp.client.streamable_http import streamablehttp_client
 
+try:
+    from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
+except ImportError:  # pragma: no cover - older mcp
+    MCP_DEFAULT_TIMEOUT = 30.0
+    MCP_DEFAULT_SSE_READ_TIMEOUT = 300.0
+
 import time
 from datetime import datetime
+
+
+def _mcp_httpx_client_factory(*, verify: bool):
+    """Match create_mcp_http_client defaults but allow TLS verify override (for self-signed HTTPS)."""
+
+    def factory(
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[httpx.Timeout] = None,
+        auth: Optional[httpx.Auth] = None,
+    ) -> httpx.AsyncClient:
+        kwargs: Dict[str, Any] = {"follow_redirects": True, "verify": verify}
+        if timeout is None:
+            kwargs["timeout"] = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
+        else:
+            kwargs["timeout"] = timeout
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    return factory
 
 def get_timestamp() -> str:
     """Returns a formatted timestamp for logging."""
@@ -28,6 +56,12 @@ def format_duration(start_time: float) -> str:
     else:
         return f"{duration:.2f}s"
 
+
+def _detail_skip_ssl_verify(details: Dict[str, Any]) -> bool:
+    """Read per-server TLS skip flag from config/API (camelCase or snake_case)."""
+    return bool(details.get("skipSslVerify") or details.get("skip_ssl_verify"))
+
+
 class PersistentConnection:
     def __init__(
         self,
@@ -37,6 +71,7 @@ class PersistentConnection:
         headers: Optional[Dict[str, str]] = None,
         transport: str = "sse",
         sampling_callback: Optional[Callable[[Any], Any]] = None,
+        skip_ssl_verify: bool = False,
     ):
         # server_key is the normalized internal key (typically lowercase).
         # display_name is what the user configured (preserve case), and is used for tool name prefixes.
@@ -45,6 +80,7 @@ class PersistentConnection:
         self.url = url
         self.headers = headers or {}
         self.transport = transport
+        self.skip_ssl_verify = skip_ssl_verify
         self.sampling_callback = sampling_callback
         self.session: Optional[ClientSession] = None
         self._task: Optional[asyncio.Task] = None
@@ -70,7 +106,17 @@ class PersistentConnection:
             try:
                 if self.transport == "http":
                     # HTTP Transport (Streamable HTTP)
-                    async with streamablehttp_client(self.url, headers=self.headers) as (read, write, _):
+                    if self.skip_ssl_verify and self.url.lower().startswith("https://"):
+                        print(
+                            f"[{get_timestamp()}] [MCP] [{self.display_name}] "
+                            "TLS certificate verification is disabled for this server"
+                        )
+                    http_factory = _mcp_httpx_client_factory(verify=not self.skip_ssl_verify)
+                    async with streamablehttp_client(
+                        self.url,
+                        headers=self.headers,
+                        httpx_client_factory=http_factory,
+                    ) as (read, write, _):
                         async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
                             self.session = session
                             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Connected via HTTP")
@@ -101,14 +147,21 @@ class PersistentConnection:
                             print(f"Response Body for {response.url}: {body}", flush=True)
                             logging.error(f"Response Body for {response.url}: {body}")
 
+                    if self.skip_ssl_verify and self.url.lower().startswith("https://"):
+                        print(
+                            f"[{get_timestamp()}] [MCP] [{self.display_name}] "
+                            "TLS certificate verification is disabled for this server"
+                        )
+
                     def custom_client_factory(headers, auth, timeout):
                         # Enforce infinite timeout for SSE connections to prevent read timeouts
                         # httpx defaults to 5s if not specified, and sometimes timeout=None isn't enough depending on context
                         return httpx.AsyncClient(
-                            headers=headers, 
-                            auth=auth, 
+                            headers=headers,
+                            auth=auth,
                             timeout=httpx.Timeout(None, connect=5.0),
-                            event_hooks={'response': [log_response_body]}
+                            verify=not self.skip_ssl_verify,
+                            event_hooks={'response': [log_response_body]},
                         )
 
                     async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
@@ -342,7 +395,11 @@ class GlobalConnectionManager:
                     for srv_name, details in servers_cfg.items():
                         hdrs = details.get("headers") or {}
                         hdr_keys = list(hdrs.keys()) if isinstance(hdrs, dict) else []
-                        print(f"[{get_timestamp()}] [Jarvis] Config mcpServers[{srv_name}]: url={details.get('url')} transport={details.get('transport','sse')} headers={hdr_keys}")
+                        print(
+                            f"[{get_timestamp()}] [Jarvis] Config mcpServers[{srv_name}]: "
+                            f"url={details.get('url')} transport={details.get('transport', 'sse')} "
+                            f"skipSslVerify={_detail_skip_ssl_verify(details)} headers={hdr_keys}"
+                        )
                 except Exception as e:
                     print(f"[{get_timestamp()}] [Jarvis] Failed to print server config summary: {e}")
                 
@@ -368,15 +425,21 @@ class GlobalConnectionManager:
                         transport_changed = existing_conn.transport != details.get("transport", "sse")
                         new_headers = details.get("headers") or {}
                         headers_changed = existing_conn.headers != new_headers
-                        
-                        if url_changed or transport_changed or headers_changed:
-                            print(f"[{get_timestamp()}] [Jarvis] Server {name} config changed (url={url_changed}, transport={transport_changed}, headers={headers_changed}), reconnecting...")
+                        skip_changed = existing_conn.skip_ssl_verify != _detail_skip_ssl_verify(details)
+
+                        if url_changed or transport_changed or headers_changed or skip_changed:
+                            print(
+                                f"[{get_timestamp()}] [Jarvis] Server {name} config changed "
+                                f"(url={url_changed}, transport={transport_changed}, headers={headers_changed}, "
+                                f"skipSslVerify={skip_changed}), reconnecting..."
+                            )
                             await self.add_server(
-                                name, 
-                                details["url"], 
-                                details.get("headers"), 
+                                name,
+                                details["url"],
+                                details.get("headers"),
                                 transport=details.get("transport", "sse"),
-                                save=False
+                                save=False,
+                                skip_ssl_verify=_detail_skip_ssl_verify(details),
                             )
                         else:
                             # Connection is active and config unchanged - skip reconnection
@@ -384,11 +447,12 @@ class GlobalConnectionManager:
                     else:
                         # Server not connected or connection lost - connect it
                         await self.add_server(
-                            name, 
-                            details["url"], 
-                            details.get("headers"), 
+                            name,
+                            details["url"],
+                            details.get("headers"),
                             transport=details.get("transport", "sse"),
-                            save=False
+                            save=False,
+                            skip_ssl_verify=_detail_skip_ssl_verify(details),
                         )
                     
                 # 3. Remove servers that are no longer in config
@@ -470,11 +534,14 @@ class GlobalConnectionManager:
         for server_key, conn in self.connections.items():
             # Persist using the original display name (preserve case for labs)
             display_name = conn.display_name or self.server_display_names.get(server_key) or server_key
-            config["mcpServers"][display_name] = {
+            entry: Dict[str, Any] = {
                 "url": conn.url,
                 "headers": conn.headers,
-                "transport": conn.transport
+                "transport": conn.transport,
             }
+            if conn.skip_ssl_verify:
+                entry["skipSslVerify"] = True
+            config["mcpServers"][display_name] = entry
         
         # Save Global Settings - MOVED TO LLM_CONFIG_FILE
         # config["llmProvider"] = self.llm_provider
@@ -528,7 +595,15 @@ class GlobalConnectionManager:
         except Exception as e:
             print(f"[{get_timestamp()}] [CONFIG] Failed to save LLM config: {e}")
 
-    async def add_server(self, server_name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse", save: bool = True):
+    async def add_server(
+        self,
+        server_name: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        transport: str = "sse",
+        save: bool = True,
+        skip_ssl_verify: bool = False,
+    ):
         # Normalize to lowercase to prevent duplicates
         display_name = server_name
         server_key = (server_name or "").lower()
@@ -539,7 +614,15 @@ class GlobalConnectionManager:
             await self.connections[server_key].stop()
 
         self.server_display_names[server_key] = display_name
-        connection = PersistentConnection(server_key, display_name, url, headers, transport, sampling_callback=self.sampling_callback)
+        connection = PersistentConnection(
+            server_key,
+            display_name,
+            url,
+            headers,
+            transport,
+            sampling_callback=self.sampling_callback,
+            skip_ssl_verify=skip_ssl_verify,
+        )
         self.connections[server_key] = connection
         connection._task = asyncio.create_task(connection.start())
         if save:
