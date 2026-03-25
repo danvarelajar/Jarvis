@@ -229,16 +229,23 @@ function App() {
             }
 
             const promises = Object.entries(config.mcpServers).map(async ([name, details]) => {
+                const pv = details.protocolVersion ?? details.protocol_version;
+                const protocolVersion =
+                    pv != null && String(pv).trim() !== '' ? String(pv).trim() : undefined;
+                const body = {
+                    server_name: name,
+                    url: details.url,
+                    headers: details.headers,
+                    transport: details.transport || 'sse',
+                    skip_ssl_verify: !!(details.skipSslVerify || details.skip_ssl_verify),
+                };
+                if (protocolVersion !== undefined) {
+                    body.protocolVersion = protocolVersion;
+                }
                 await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        server_name: name,
-                        url: details.url,
-                        headers: details.headers,
-                        transport: details.transport || 'sse',
-                        skip_ssl_verify: !!(details.skipSslVerify || details.skip_ssl_verify),
-                    }),
+                    body: JSON.stringify(body),
                 });
                 return name;
             });
