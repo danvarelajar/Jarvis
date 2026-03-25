@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import os
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from typing import List, Dict, Any, Optional
 import mcp.types as types
 import asyncio
@@ -22,7 +22,12 @@ def format_duration(start_time: float) -> str:
     else:
         return f"{duration:.2f}s"
 
-from .mcp_client import connection_manager, parse_server_route, parse_all_server_routes
+from .mcp_client import (
+    _detail_protocol_version,
+    connection_manager,
+    parse_all_server_routes,
+    parse_server_route,
+)
 from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url
 
 app = FastAPI()
@@ -107,6 +112,10 @@ class ConnectRequest(BaseModel):
     headers: Optional[Dict[str, str]] = None
     transport: str = "sse"
     skip_ssl_verify: bool = False
+    protocol_version: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("protocol_version", "protocolVersion"),
+    )
 
 # Sampling Handler
 async def handle_sampling_message(params: types.CreateMessageRequestParams) -> types.CreateMessageResult:
@@ -229,6 +238,7 @@ async def connect_server(request: ConnectRequest):
         request.transport,
         save=True,
         skip_ssl_verify=request.skip_ssl_verify,
+        protocol_version=request.protocol_version,
     )
     return {"status": "connected", "server": request.server_name}
 
@@ -249,12 +259,15 @@ async def get_config():
     for server_key, conn in connection_manager.connections.items():
         # Preserve display name in the config response (helps labs that reference Booking__*)
         display_name = getattr(conn, "display_name", None) or server_key
-        config["mcpServers"][display_name] = {
+        entry = {
             "url": conn.url,
             "headers": conn.headers,
             "transport": conn.transport,
             "skipSslVerify": conn.skip_ssl_verify,
         }
+        if getattr(conn, "protocol_version", None):
+            entry["protocolVersion"] = conn.protocol_version
+        config["mcpServers"][display_name] = entry
     return config
 
 class ConfigRequest(BaseModel):
@@ -308,6 +321,7 @@ async def update_config(request: ConfigRequest):
             details.get("transport", "sse"),
             save=True,
             skip_ssl_verify=skip_tls,
+            protocol_version=_detail_protocol_version(details),
         )
     return {"status": "updated", "count": len(request.mcpServers)}
 

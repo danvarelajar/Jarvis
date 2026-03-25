@@ -7,7 +7,14 @@ import anyio
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.session import (
+    _default_elicitation_callback,
+    _default_list_roots_callback,
+    _default_sampling_callback,
+)
+from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 from mcp.types import CreateMessageResult
+import mcp.types as mcp_types
 
 
 
@@ -74,6 +81,98 @@ def _detail_skip_ssl_verify(details: Dict[str, Any]) -> bool:
     return bool(details.get("skipSslVerify") or details.get("skip_ssl_verify"))
 
 
+def _detail_protocol_version(details: Dict[str, Any]) -> Optional[str]:
+    """Optional MCP initialize protocolVersion (camelCase or snake_case). Empty/absent -> SDK default."""
+    raw = details.get("protocolVersion") or details.get("protocol_version")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
+
+
+class ProtocolPinnedClientSession(ClientSession):
+    """ClientSession that advertises a fixed protocolVersion in initialize() (per-server pin)."""
+
+    def __init__(
+        self,
+        read_stream: Any,
+        write_stream: Any,
+        *,
+        protocol_version: str,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(read_stream, write_stream, **kwargs)
+        self._jarvis_protocol_version = protocol_version
+
+    async def initialize(self) -> mcp_types.InitializeResult:
+        sampling = (
+            (self._sampling_capabilities or mcp_types.SamplingCapability())
+            if self._sampling_callback is not _default_sampling_callback
+            else None
+        )
+        elicitation = (
+            mcp_types.ElicitationCapability(
+                form=mcp_types.FormElicitationCapability(),
+                url=mcp_types.UrlElicitationCapability(),
+            )
+            if self._elicitation_callback is not _default_elicitation_callback
+            else None
+        )
+        roots = (
+            mcp_types.RootsCapability(listChanged=True)
+            if self._list_roots_callback is not _default_list_roots_callback
+            else None
+        )
+
+        result = await self.send_request(
+            mcp_types.ClientRequest(
+                mcp_types.InitializeRequest(
+                    params=mcp_types.InitializeRequestParams(
+                        protocolVersion=self._jarvis_protocol_version,
+                        capabilities=mcp_types.ClientCapabilities(
+                            sampling=sampling,
+                            elicitation=elicitation,
+                            experimental=None,
+                            roots=roots,
+                            tasks=self._task_handlers.build_capability(),
+                        ),
+                        clientInfo=self._client_info,
+                    ),
+                )
+            ),
+            mcp_types.InitializeResult,
+        )
+
+        if result.protocolVersion not in SUPPORTED_PROTOCOL_VERSIONS:
+            raise RuntimeError(
+                f"Unsupported protocol version from the server: {result.protocolVersion}"
+            )
+
+        self._server_capabilities = result.capabilities
+
+        await self.send_notification(mcp_types.ClientNotification(mcp_types.InitializedNotification()))
+
+        return result
+
+
+def _open_client_session(
+    read_stream: Any,
+    write_stream: Any,
+    *,
+    sampling_callback: Optional[Callable[[Any], Any]],
+    protocol_version: Optional[str],
+):
+    """ClientSession, or ProtocolPinnedClientSession when protocol_version is set."""
+    kw: Dict[str, Any] = {}
+    if sampling_callback is not None:
+        kw["sampling_callback"] = sampling_callback
+    if protocol_version:
+        return ProtocolPinnedClientSession(
+            read_stream, write_stream, protocol_version=protocol_version, **kw
+        )
+    return ClientSession(read_stream, write_stream, **kw)
+
+
 class PersistentConnection:
     def __init__(
         self,
@@ -84,6 +183,7 @@ class PersistentConnection:
         transport: str = "sse",
         sampling_callback: Optional[Callable[[Any], Any]] = None,
         skip_ssl_verify: bool = False,
+        protocol_version: Optional[str] = None,
     ):
         # server_key is the normalized internal key (typically lowercase).
         # display_name is what the user configured (preserve case), and is used for tool name prefixes.
@@ -93,6 +193,7 @@ class PersistentConnection:
         self.headers = headers or {}
         self.transport = transport
         self.skip_ssl_verify = skip_ssl_verify
+        self.protocol_version = protocol_version
         self.sampling_callback = sampling_callback
         self.session: Optional[ClientSession] = None
         self._task: Optional[asyncio.Task] = None
@@ -129,7 +230,12 @@ class PersistentConnection:
                         headers=self.headers,
                         httpx_client_factory=http_factory,
                     ) as (read, write, _):
-                        async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
+                        async with _open_client_session(
+                            read,
+                            write,
+                            sampling_callback=self.sampling_callback,
+                            protocol_version=self.protocol_version,
+                        ) as session:
                             self.session = session
                             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Connected via HTTP")
                             init_start = time.time()
@@ -177,7 +283,12 @@ class PersistentConnection:
                         )
 
                     async with sse_client(self.url, headers=self.headers, timeout=None, httpx_client_factory=custom_client_factory) as (read, write):
-                        async with ClientSession(read, write, sampling_callback=self.sampling_callback) as session:
+                        async with _open_client_session(
+                            read,
+                            write,
+                            sampling_callback=self.sampling_callback,
+                            protocol_version=self.protocol_version,
+                        ) as session:
                             self.session = session
                             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Connected via SSE")
                             init_start = time.time()
@@ -439,10 +550,12 @@ class GlobalConnectionManager:
                     for srv_name, details in servers_cfg.items():
                         hdrs = details.get("headers") or {}
                         hdr_keys = list(hdrs.keys()) if isinstance(hdrs, dict) else []
+                        pv = _detail_protocol_version(details)
                         print(
                             f"[{get_timestamp()}] [Jarvis] Config mcpServers[{srv_name}]: "
                             f"url={details.get('url')} transport={details.get('transport', 'sse')} "
-                            f"skipSslVerify={_detail_skip_ssl_verify(details)} headers={hdr_keys}"
+                            f"skipSslVerify={_detail_skip_ssl_verify(details)} "
+                            f"protocolVersion={pv or '(sdk default)'} headers={hdr_keys}"
                         )
                 except Exception as e:
                     print(f"[{get_timestamp()}] [Jarvis] Failed to print server config summary: {e}")
@@ -470,12 +583,20 @@ class GlobalConnectionManager:
                         new_headers = details.get("headers") or {}
                         headers_changed = existing_conn.headers != new_headers
                         skip_changed = existing_conn.skip_ssl_verify != _detail_skip_ssl_verify(details)
+                        want_pv = _detail_protocol_version(details)
+                        protocol_changed = existing_conn.protocol_version != want_pv
 
-                        if url_changed or transport_changed or headers_changed or skip_changed:
+                        if (
+                            url_changed
+                            or transport_changed
+                            or headers_changed
+                            or skip_changed
+                            or protocol_changed
+                        ):
                             print(
                                 f"[{get_timestamp()}] [Jarvis] Server {name} config changed "
                                 f"(url={url_changed}, transport={transport_changed}, headers={headers_changed}, "
-                                f"skipSslVerify={skip_changed}), reconnecting..."
+                                f"skipSslVerify={skip_changed}, protocolVersion={protocol_changed}), reconnecting..."
                             )
                             await self.add_server(
                                 name,
@@ -484,6 +605,7 @@ class GlobalConnectionManager:
                                 transport=details.get("transport", "sse"),
                                 save=False,
                                 skip_ssl_verify=_detail_skip_ssl_verify(details),
+                                protocol_version=want_pv,
                             )
                         else:
                             # Connection is active and config unchanged - skip reconnection
@@ -497,6 +619,7 @@ class GlobalConnectionManager:
                             transport=details.get("transport", "sse"),
                             save=False,
                             skip_ssl_verify=_detail_skip_ssl_verify(details),
+                            protocol_version=_detail_protocol_version(details),
                         )
                     
                 # 3. Remove servers that are no longer in config
@@ -585,6 +708,8 @@ class GlobalConnectionManager:
             }
             if conn.skip_ssl_verify:
                 entry["skipSslVerify"] = True
+            if conn.protocol_version:
+                entry["protocolVersion"] = conn.protocol_version
             config["mcpServers"][display_name] = entry
         
         # Save Global Settings - MOVED TO LLM_CONFIG_FILE
@@ -647,6 +772,7 @@ class GlobalConnectionManager:
         transport: str = "sse",
         save: bool = True,
         skip_ssl_verify: bool = False,
+        protocol_version: Optional[str] = None,
     ):
         # Normalize to lowercase to prevent duplicates
         display_name = server_name
@@ -666,6 +792,7 @@ class GlobalConnectionManager:
             transport,
             sampling_callback=self.sampling_callback,
             skip_ssl_verify=skip_ssl_verify,
+            protocol_version=protocol_version,
         )
         self.connections[server_key] = connection
         connection._task = asyncio.create_task(connection.start())
