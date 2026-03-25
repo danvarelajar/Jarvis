@@ -308,9 +308,6 @@ async def update_config(request: ConfigRequest):
             print(f"[{get_timestamp()}] [DEBUG] Skipped updating model name (empty after strip)")
     if request.ollamaSkipSslVerify is not None:
         connection_manager.ollama_skip_ssl_verify = request.ollamaSkipSslVerify
-    
-    # Save globally after updating fields
-    connection_manager.save_config()
 
     for name, details in request.mcpServers.items():
         skip_tls = bool(details.get("skipSslVerify") or details.get("skip_ssl_verify"))
@@ -319,10 +316,12 @@ async def update_config(request: ConfigRequest):
             details["url"],
             details.get("headers"),
             details.get("transport", "sse"),
-            save=True,
+            save=False,
             skip_ssl_verify=skip_tls,
             protocol_version=_detail_protocol_version(details),
         )
+    # One write after all MCP rows are applied (avoids stale snapshots and parallel /api/connect races)
+    connection_manager.save_config()
     return {"status": "updated", "count": len(request.mcpServers)}
 
 @app.get("/api/health")

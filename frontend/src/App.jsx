@@ -228,31 +228,46 @@ function App() {
                 throw new Error("Invalid config: missing 'mcpServers' key");
             }
 
-            const promises = Object.entries(config.mcpServers).map(async ([name, details]) => {
-                const pv = details.protocolVersion ?? details.protocol_version;
-                const protocolVersion =
-                    pv != null && String(pv).trim() !== '' ? String(pv).trim() : undefined;
-                const body = {
-                    server_name: name,
-                    url: details.url,
-                    headers: details.headers,
-                    transport: details.transport || 'sse',
-                    skip_ssl_verify: !!(details.skipSslVerify || details.skip_ssl_verify),
-                };
-                if (protocolVersion !== undefined) {
-                    body.protocolVersion = protocolVersion;
-                }
-                await fetch('/api/connect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                return name;
-            });
+            // Single POST /api/config applies every server in order and reads protocolVersion from
+            // each mcpServers entry (dict), then saves once — avoids parallel /api/connect races.
+            const payload = {
+                mcpServers: config.mcpServers,
+                llmProvider: config.llmProvider !== undefined ? config.llmProvider : llmProvider,
+                ollamaUrl: config.ollamaUrl !== undefined ? config.ollamaUrl : ollamaUrl,
+                ollamaModelName:
+                    config.ollamaModelName !== undefined ? config.ollamaModelName : ollamaModelName,
+                ollamaSkipSslVerify:
+                    config.ollamaSkipSslVerify !== undefined
+                        ? config.ollamaSkipSslVerify
+                        : ollamaSkipSslVerify,
+            };
+            const keyFromState = openaiApiKey.trim();
+            if (keyFromState) {
+                payload.openaiApiKey = keyFromState;
+            } else if (config.openaiApiKey) {
+                payload.openaiApiKey = config.openaiApiKey;
+            }
 
-            const connectedServerNames = await Promise.all(promises);
-            setServers(connectedServerNames);
-            alert(`Configuration saved and ${connectedServerNames.length} servers connected`);
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(errText || `HTTP ${response.status}`);
+            }
+
+            const names = Object.keys(config.mcpServers);
+            setServers(names);
+
+            const refresh = await fetch('/api/config');
+            if (refresh.ok) {
+                const saved = await refresh.json();
+                setServerConfigJson(JSON.stringify(saved, null, 2));
+            }
+
+            alert(`Configuration saved and ${names.length} servers connected`);
         } catch (error) {
             alert(`Failed to connect: ${error.message}`);
         }
