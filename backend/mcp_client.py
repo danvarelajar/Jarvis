@@ -695,39 +695,54 @@ class GlobalConnectionManager:
                     print(f"Error watching config: {e}")
                     self._reloading = False
 
-    def save_config(self):
-        # Save MCP Servers
-        config = {"mcpServers": {}}
-        for server_key, conn in self.connections.items():
-            # Persist using the original display name (preserve case for labs)
-            display_name = conn.display_name or self.server_display_names.get(server_key) or server_key
-            entry: Dict[str, Any] = {
-                "url": conn.url,
-                "headers": conn.headers,
-                "transport": conn.transport,
-            }
-            if conn.skip_ssl_verify:
-                entry["skipSslVerify"] = True
-            if conn.protocol_version:
-                entry["protocolVersion"] = conn.protocol_version
-            config["mcpServers"][display_name] = entry
-        
-        # Save Global Settings - MOVED TO LLM_CONFIG_FILE
-        # config["llmProvider"] = self.llm_provider
-        # config["ollamaUrl"] = self.ollama_url
-        
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-        
-        try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
-            # Update mtime after saving to prevent immediate reload
-            if os.path.exists(CONFIG_FILE):
-                self.last_config_mtime = os.path.getmtime(CONFIG_FILE)
-            print(f"Saved config to {CONFIG_FILE}")
-        except Exception as e:
-            print(f"Failed to save config: {e}")
+    def save_config(self, include_mcp: bool = True):
+        """Persist secrets and LLM config. MCP servers are written only when include_mcp is True.
+
+        LLM-only /api/config POSTs use mcpServers: {} so we must not rewrite mcp_config.json
+        in that case (avoids wiping disk when connections are empty or out of sync).
+        """
+        write_mcp = include_mcp
+        if write_mcp:
+            config = {"mcpServers": {}}
+            for server_key, conn in self.connections.items():
+                # Persist using the original display name (preserve case for labs)
+                display_name = conn.display_name or self.server_display_names.get(server_key) or server_key
+                entry: Dict[str, Any] = {
+                    "url": conn.url,
+                    "headers": conn.headers,
+                    "transport": conn.transport,
+                }
+                if conn.skip_ssl_verify:
+                    entry["skipSslVerify"] = True
+                if conn.protocol_version:
+                    entry["protocolVersion"] = conn.protocol_version
+                config["mcpServers"][display_name] = entry
+
+            # Safety: never replace a non-empty persisted MCP file with {"mcpServers": {}} when
+            # in-memory connections are empty (race or bug would otherwise cascade via load_config).
+            if not config["mcpServers"] and os.path.exists(CONFIG_FILE):
+                try:
+                    with open(CONFIG_FILE, "r") as f:
+                        existing = json.load(f)
+                    if existing.get("mcpServers"):
+                        print(
+                            f"[{get_timestamp()}] [CONFIG] Preserving {CONFIG_FILE}: "
+                            "no in-memory MCP connections; refusing to overwrite file that lists servers"
+                        )
+                        write_mcp = False
+                except Exception as e:
+                    print(f"[{get_timestamp()}] [CONFIG] Could not read existing MCP file for save guard: {e}")
+
+            if write_mcp:
+                os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+                try:
+                    with open(CONFIG_FILE, "w") as f:
+                        json.dump(config, f, indent=2)
+                    if os.path.exists(CONFIG_FILE):
+                        self.last_config_mtime = os.path.getmtime(CONFIG_FILE)
+                    print(f"Saved config to {CONFIG_FILE}")
+                except Exception as e:
+                    print(f"Failed to save config: {e}")
 
         # Save Secrets
         # Preserve existing secrets if the in-memory key is empty/None to avoid "reset on restart".

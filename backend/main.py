@@ -320,8 +320,11 @@ async def update_config(request: ConfigRequest):
             skip_ssl_verify=skip_tls,
             protocol_version=_detail_protocol_version(details),
         )
-    # One write after all MCP rows are applied (avoids stale snapshots and parallel /api/connect races)
-    connection_manager.save_config()
+    # LLM-only POSTs send mcpServers: {}. Saving MCP JSON from empty in-memory state would wipe
+    # mcp_config.json; load_config would then drop all servers. Only persist MCP file when the
+    # request actually includes server entries (Connect / Refresh) or /api/connect save=True.
+    include_mcp = bool(request.mcpServers)
+    connection_manager.save_config(include_mcp=include_mcp)
     return {"status": "updated", "count": len(request.mcpServers)}
 
 @app.get("/api/health")
