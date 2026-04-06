@@ -760,6 +760,7 @@ class GlobalConnectionManager:
             with open(LLM_CONFIG_FILE, 'w') as f:
                 json.dump(llm_config, f, indent=2)
             print(f"[{get_timestamp()}] [CONFIG] Saved LLM config to {LLM_CONFIG_FILE}")
+            print(f"[{get_timestamp()}] [CONFIG] Saved llmProvider: '{self.llm_provider}'")
             print(f"[{get_timestamp()}] [CONFIG] Saved ollamaModelName: '{self.ollama_model_name}'")
         except Exception as e:
             print(f"[{get_timestamp()}] [CONFIG] Failed to save LLM config: {e}")

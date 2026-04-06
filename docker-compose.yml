@@ -1,7 +1,9 @@
 services:
+  # Frontend is baked in at image build (npm run build in Dockerfile); ./app/data is the only bind mount.
+  # After changing frontend or backend code: docker compose build --no-cache && docker compose up -d
   jarvis:
     build: .
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - ./app/data:/app/data

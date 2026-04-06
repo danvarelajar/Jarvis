@@ -230,16 +230,14 @@ function App() {
 
             // Single POST /api/config applies every server in order and reads protocolVersion from
             // each mcpServers entry (dict), then saves once — avoids parallel /api/connect races.
+            // LLM fields must come from React state, not from parsed JSON: the textarea often lags
+            // behind the sidebar (e.g. user switches to Ollama but JSON still has llmProvider: openai).
             const payload = {
                 mcpServers: config.mcpServers,
-                llmProvider: config.llmProvider !== undefined ? config.llmProvider : llmProvider,
-                ollamaUrl: config.ollamaUrl !== undefined ? config.ollamaUrl : ollamaUrl,
-                ollamaModelName:
-                    config.ollamaModelName !== undefined ? config.ollamaModelName : ollamaModelName,
-                ollamaSkipSslVerify:
-                    config.ollamaSkipSslVerify !== undefined
-                        ? config.ollamaSkipSslVerify
-                        : ollamaSkipSslVerify,
+                llmProvider,
+                ollamaUrl,
+                ollamaModelName,
+                ollamaSkipSslVerify,
             };
             const keyFromState = openaiApiKey.trim();
             if (keyFromState) {
