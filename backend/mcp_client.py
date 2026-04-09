@@ -221,6 +221,8 @@ class PersistentConnection:
         self.prompts_cache_timestamp = 0
         
         self.CACHE_TTL = 300  # 5 minutes
+        self.LIST_TOOLS_TIMEOUT_SECONDS = 5.0
+        self.LIST_TOOLS_MAX_RETRIES = 3
 
     async def start(self):
         # Exponential backoff parameters
@@ -405,21 +407,49 @@ class PersistentConnection:
             
         try:
             list_start = time.time()
-            print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools()", flush=True)
-            
-            # Add timeout to prevent indefinite hanging (30 seconds should be enough for list_tools)
-            list_tools_timeout = 30.0  # 30 seconds
-            try:
-                result = await asyncio.wait_for(
-                    self.session.list_tools(),
-                    timeout=list_tools_timeout
+            timeout_s = self.LIST_TOOLS_TIMEOUT_SECONDS
+            max_retries = self.LIST_TOOLS_MAX_RETRIES
+            result = None
+
+            for attempt in range(1, max_retries + 1):
+                print(
+                    f"[{get_timestamp()}] [MCP] [{self.display_name}] Request: list_tools() "
+                    f"(attempt {attempt}/{max_retries}, timeout={timeout_s:.1f}s)",
+                    flush=True,
                 )
-            except asyncio.TimeoutError:
-                elapsed = time.time() - list_start
-                print(f"[{get_timestamp()}] [MCP] [{self.display_name}] ⚠️  Timeout after {elapsed:.1f}s - server unresponsive ({format_duration(list_start)})", flush=True)
-                # Return empty list instead of raising - caller will handle gracefully
+                try:
+                    result = await asyncio.wait_for(
+                        self.session.list_tools(),
+                        timeout=timeout_s,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    elapsed = time.time() - list_start
+                    print(
+                        f"[{get_timestamp()}] [MCP] [{self.display_name}] ⚠️ list_tools timeout "
+                        f"after {elapsed:.1f}s (attempt {attempt}/{max_retries})",
+                        flush=True,
+                    )
+                    if attempt >= max_retries:
+                        return []
+                    await asyncio.sleep(0.2)
+                except Exception as e:
+                    # Fail fast for malformed/closed transport; background task will reconnect.
+                    if _is_transport_closed_error(e) or _is_malformed_jsonrpc_error(e):
+                        raise
+                    detail = str(e).strip() or repr(e)
+                    print(
+                        f"[{get_timestamp()}] [MCP] [{self.display_name}] list_tools transient error "
+                        f"(attempt {attempt}/{max_retries}): {type(e).__name__}: {detail}",
+                        flush=True,
+                    )
+                    if attempt >= max_retries:
+                        return []
+                    await asyncio.sleep(0.2)
+
+            if result is None:
                 return []
-            
+
             self.tools_cache = []
             for t in result.tools:
                 tool_dump = t.model_dump()

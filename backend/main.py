@@ -619,7 +619,7 @@ async def chat(request: ChatRequest, req: Request):
                             f"Configured servers in saved JSON: [{known}]"
                         ),
                     }
-                for attempt in range(10):  # ~3s max
+                for attempt in range(3):
                     tools = await connection_manager.list_tools(target_server)
                     if tools:
                         break
