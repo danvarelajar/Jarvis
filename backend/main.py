@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import os
+import json
 from pydantic import AliasChoices, BaseModel, Field
 from typing import List, Dict, Any, Optional
 import mcp.types as types
@@ -23,7 +24,9 @@ def format_duration(start_time: float) -> str:
         return f"{duration:.2f}s"
 
 from .mcp_client import (
-    _detail_protocol_version,
+    CONFIG_FILE,
+    LLM_CONFIG_FILE,
+    SECRETS_FILE,
     connection_manager,
     parse_all_server_routes,
     parse_server_route,
@@ -223,11 +226,8 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
 @app.on_event("startup")
 async def startup_event():
     connection_manager.set_sampling_callback(handle_sampling_message)
-    # Reload config to apply callback to connections
-    await connection_manager.load_config()
-    # Start config watcher (only if not already running)
-    if not connection_manager._watcher_task or connection_manager._watcher_task.done():
-        connection_manager._watcher_task = asyncio.create_task(connection_manager.watch_config())
+    # Load LLM/secrets only. MCP servers are connected lazily when @server is used.
+    await connection_manager.load_runtime_settings_only()
 
 @app.post("/api/connect")
 async def connect_server(request: ConnectRequest):
@@ -244,30 +244,56 @@ async def connect_server(request: ConnectRequest):
 
 @app.get("/api/config")
 async def get_config():
-    # Reload config from filesystem on every request to ensure freshness
-    await connection_manager.load_config()
-    
-    # Construct config from active connections
+    # Read persisted config files only (no side effects like connecting MCP servers).
     config = {
         "mcpServers": {},
-        "openaiApiKey": connection_manager.openai_api_key,
-        "llmProvider": connection_manager.llm_provider,
-        "ollamaUrl": connection_manager.ollama_url,
-        "ollamaModelName": connection_manager.ollama_model_name,
-        "ollamaSkipSslVerify": getattr(connection_manager, "ollama_skip_ssl_verify", False),
+        "openaiApiKey": None,
+        "llmProvider": "openai",
+        "ollamaUrl": "http://10.3.0.7:11434",
+        "ollamaModelName": "",
+        "ollamaSkipSslVerify": False,
     }
-    for server_key, conn in connection_manager.connections.items():
-        # Preserve display name in the config response (helps labs that reference Booking__*)
-        display_name = getattr(conn, "display_name", None) or server_key
-        entry = {
-            "url": conn.url,
-            "headers": conn.headers,
-            "transport": conn.transport,
-            "skipSslVerify": conn.skip_ssl_verify,
-        }
-        if getattr(conn, "protocol_version", None):
-            entry["protocolVersion"] = conn.protocol_version
-        config["mcpServers"][display_name] = entry
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                raw = f.read()
+            # Keep compatibility with mcp_config files that contain comment lines.
+            lines = raw.splitlines()
+            clean_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("#"):
+                    continue
+                clean_lines.append(line)
+            parsed = json.loads("\n".join(clean_lines))
+            mcp_servers = parsed.get("mcpServers", {})
+            if isinstance(mcp_servers, dict):
+                config["mcpServers"] = mcp_servers
+        except Exception as e:
+            print(f"[{get_timestamp()}] [CONFIG] Failed reading {CONFIG_FILE}: {e}")
+
+    if os.path.exists(SECRETS_FILE):
+        try:
+            with open(SECRETS_FILE, "r") as f:
+                secrets = json.load(f)
+            config["openaiApiKey"] = secrets.get("openaiApiKey") or secrets.get("ApiKey")
+        except Exception as e:
+            print(f"[{get_timestamp()}] [CONFIG] Failed reading {SECRETS_FILE}: {e}")
+
+    if os.path.exists(LLM_CONFIG_FILE):
+        try:
+            with open(LLM_CONFIG_FILE, "r") as f:
+                llm_cfg = json.load(f)
+            config["llmProvider"] = llm_cfg.get("llmProvider", config["llmProvider"])
+            config["ollamaUrl"] = llm_cfg.get("ollamaUrl", config["ollamaUrl"])
+            config["ollamaModelName"] = llm_cfg.get("ollamaModelName", config["ollamaModelName"])
+            config["ollamaSkipSslVerify"] = llm_cfg.get(
+                "ollamaSkipSslVerify", config["ollamaSkipSslVerify"]
+            )
+        except Exception as e:
+            print(f"[{get_timestamp()}] [CONFIG] Failed reading {LLM_CONFIG_FILE}: {e}")
+
     return config
 
 class ConfigRequest(BaseModel):
@@ -280,10 +306,7 @@ class ConfigRequest(BaseModel):
 
 @app.post("/api/config")
 async def update_config(request: ConfigRequest):
-    # This endpoint replaces the current config with the new one
-    # For simplicity, we'll just add new ones. 
-    # To fully replace, we'd need to stop existing connections, which we haven't implemented.
-    # So we'll just add/update.
+    # Save-only endpoint: persist config without initializing MCP connections.
     # Do not clobber an existing key with empty string/null-equivalent.
     if request.openaiApiKey is not None:
         candidate = request.openaiApiKey.strip()
@@ -309,22 +332,18 @@ async def update_config(request: ConfigRequest):
     if request.ollamaSkipSslVerify is not None:
         connection_manager.ollama_skip_ssl_verify = request.ollamaSkipSslVerify
 
-    for name, details in request.mcpServers.items():
-        skip_tls = bool(details.get("skipSslVerify") or details.get("skip_ssl_verify"))
-        await connection_manager.add_server(
-            name,
-            details["url"],
-            details.get("headers"),
-            details.get("transport", "sse"),
-            save=False,
-            skip_ssl_verify=skip_tls,
-            protocol_version=_detail_protocol_version(details),
-        )
-    # LLM-only POSTs send mcpServers: {}. Saving MCP JSON from empty in-memory state would wipe
-    # mcp_config.json; load_config would then drop all servers. Only persist MCP file when the
-    # request actually includes server entries (Connect / Refresh) or /api/connect save=True.
-    include_mcp = bool(request.mcpServers)
-    connection_manager.save_config(include_mcp=include_mcp)
+    if request.mcpServers:
+        try:
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            with open(CONFIG_FILE, "w") as f:
+                json.dump({"mcpServers": request.mcpServers}, f, indent=2)
+            connection_manager.last_config_mtime = os.path.getmtime(CONFIG_FILE)
+            print(f"[{get_timestamp()}] [CONFIG] Saved MCP servers to {CONFIG_FILE} (save-only)")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save MCP config: {e}")
+
+    # Persist secrets + LLM config only (never derive/write MCP config from live connections here).
+    connection_manager.save_config(include_mcp=False)
     return {"status": "updated", "count": len(request.mcpServers)}
 
 @app.get("/api/health")
@@ -475,10 +494,10 @@ async def chat(request: ChatRequest, req: Request):
     except Exception as e:
         print(f"[{get_timestamp()}] [REQUEST] Error inspecting request: {e}", flush=True)
     
-    # Reload config to ensure we have the latest model name
+    # Reload runtime settings (LLM/secrets) without auto-connecting MCP servers.
     config_start = time.time()
-    await connection_manager.load_config()
-    print(f"[{get_timestamp()}] [REQUEST] Config reloaded ({format_duration(config_start)})")
+    await connection_manager.load_runtime_settings_only()
+    print(f"[{get_timestamp()}] [REQUEST] Runtime settings reloaded ({format_duration(config_start)})")
     
     # Extract user message with error handling
     try:
@@ -562,6 +581,10 @@ async def chat(request: ChatRequest, req: Request):
             if server == "shell":
                 continue  # Shell handled separately below
             try:
+                connected = await connection_manager.ensure_server_connected(server)
+                if not connected:
+                    print(f"[{get_timestamp()}] [WARN] @{server} not connected and not found in persisted config", flush=True)
+                    continue
                 server_tools = await connection_manager.list_tools(server)
                 tools.extend(server_tools)
                 if server_tools:
@@ -585,6 +608,17 @@ async def chat(request: ChatRequest, req: Request):
             # If the user explicitly targeted a server, wait briefly for tools to be available.
             try:
                 import asyncio
+                connected = await connection_manager.ensure_server_connected(target_server)
+                if not connected:
+                    persisted_names = sorted(connection_manager.get_persisted_mcp_servers().keys())
+                    known = ", ".join(persisted_names) if persisted_names else "(none)"
+                    return {
+                        "role": "assistant",
+                        "content": (
+                            f"Server @{target_server} is not configured. "
+                            f"Configured servers in saved JSON: [{known}]"
+                        ),
+                    }
                 for attempt in range(10):  # ~3s max
                     tools = await connection_manager.list_tools(target_server)
                     if tools:
@@ -607,12 +641,9 @@ async def chat(request: ChatRequest, req: Request):
                     )
                 }
     else:
-        print("DEBUG: No target server detected. Loading ALL tools.")
-        try:
-            tools = await connection_manager.list_tools()
-        except Exception as e:
-            print(f"[{get_timestamp()}] [ERROR] Failed to load tools: {e}", flush=True)
-            tools = []
+        # Strict explicit routing: do not list tools unless user provided @server.
+        print("DEBUG: No @server target detected. Skipping tool discovery.")
+        tools = []
     
     # 2.1 Add Native Shell Capability (Only if explicitly requested via @shell?)
     # For now, let's include it ONLY if target_server is 'shell' or 'system'

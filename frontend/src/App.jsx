@@ -265,9 +265,9 @@ function App() {
                 setServerConfigJson(JSON.stringify(saved, null, 2));
             }
 
-            alert(`Configuration saved and ${names.length} servers connected`);
+            alert(`Configuration saved (${names.length} servers configured)`);
         } catch (error) {
-            alert(`Failed to connect: ${error.message}`);
+            alert(`Failed to save configuration: ${error.message}`);
         }
     };
 
@@ -515,7 +515,7 @@ function App() {
                                 className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs text-white flex items-center justify-center gap-2"
                             >
                                 <Terminal size={14} />
-                                Connect / Refresh All
+                                Save
                             </button>
                         </div>
                     )}

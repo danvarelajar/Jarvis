@@ -42,6 +42,18 @@ def _is_transport_closed_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_malformed_jsonrpc_error(exc: BaseException) -> bool:
+    """True when SDK failed to decode/validate a malformed JSON-RPC frame."""
+    msg = str(exc).lower()
+    if "jsonrpcmessage" in msg and ("invalid json" in msg or "json_invalid" in msg):
+        return True
+    return (
+        "eof while parsing" in msg
+        or "unterminated string" in msg
+        or "expecting value" in msg
+    )
+
+
 def _mcp_httpx_client_factory(*, verify: bool):
     """Match create_mcp_http_client defaults but allow TLS verify override (for self-signed HTTPS)."""
 
@@ -432,6 +444,18 @@ class PersistentConnection:
                 self.resources_cache = None
                 self.prompts_cache = None
                 return []
+            if _is_malformed_jsonrpc_error(e):
+                print(
+                    f"[{get_timestamp()}] [MCP] [{self.display_name}] list_tools: malformed JSON-RPC payload "
+                    f"({type(e).__name__}); clearing session — background task will reconnect",
+                    flush=True,
+                )
+                self.session = None
+                self.tools_cache = None
+                self.tools_cache_timestamp = 0
+                self.resources_cache = None
+                self.prompts_cache = None
+                return []
             # Log unexpected errors but don't crash - return empty list.
             # Many libraries raise with an empty message; str(e) is then blank — use type + repr + traceback.
             detail = str(e).strip() or repr(e)
@@ -517,6 +541,64 @@ class GlobalConnectionManager:
         self.last_config_mtime = 0
         self._watcher_task: Optional[asyncio.Task] = None
         self._reloading = False  # Flag to prevent concurrent reloads
+
+    def _read_json_with_comments(self, path: str) -> Dict[str, Any]:
+        """Read JSON file while ignoring full-line // and # comments."""
+        with open(path, "r") as f:
+            content = f.read()
+        lines = content.splitlines()
+        clean_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("#"):
+                continue
+            clean_lines.append(line)
+        return json.loads("\n".join(clean_lines))
+
+    def get_persisted_mcp_servers(self) -> Dict[str, Dict[str, Any]]:
+        """Return persisted mcpServers from disk without creating connections."""
+        if not os.path.exists(CONFIG_FILE):
+            return {}
+        try:
+            parsed = self._read_json_with_comments(CONFIG_FILE)
+            servers = parsed.get("mcpServers", {})
+            return servers if isinstance(servers, dict) else {}
+        except Exception as e:
+            print(f"[{get_timestamp()}] [Jarvis] Failed to read persisted MCP config: {e}")
+            return {}
+
+    async def load_runtime_settings_only(self):
+        """Load only LLM/secrets settings (no MCP server connections)."""
+        print(f"[{get_timestamp()}] [Jarvis] Loading runtime settings only (no MCP auto-connect)")
+        # Load LLM Config
+        if os.path.exists(LLM_CONFIG_FILE):
+            try:
+                with open(LLM_CONFIG_FILE, "r") as f:
+                    llm_config = json.load(f)
+                    self.llm_provider = llm_config.get("llmProvider", "openai")
+                    self.ollama_url = llm_config.get("ollamaUrl", "http://10.3.0.7:11434")
+                    old_model = getattr(self, "ollama_model_name", None)
+                    self.ollama_model_name = llm_config.get("ollamaModelName", "")
+                    self.ollama_skip_ssl_verify = llm_config.get("ollamaSkipSslVerify", False)
+                print(f"[{get_timestamp()}] [CONFIG] Loaded LLM config from {LLM_CONFIG_FILE}")
+                print(f"[{get_timestamp()}] [CONFIG] Loaded ollama_model_name: '{self.ollama_model_name}' (was: '{old_model}')")
+            except Exception as e:
+                print(f"[{get_timestamp()}] [CONFIG] Failed to load LLM config: {e}")
+        else:
+            print(f"[{get_timestamp()}] [CONFIG] LLM config not found at {LLM_CONFIG_FILE}, using defaults")
+
+        # Load secrets
+        if os.path.exists(SECRETS_FILE):
+            try:
+                with open(SECRETS_FILE, "r") as f:
+                    secrets = json.load(f)
+                    # Prefer openaiApiKey, but keep backwards-compatibility with older "ApiKey"
+                    self.openai_api_key = secrets.get("openaiApiKey") or secrets.get("ApiKey")
+                print(f"Loaded secrets from {SECRETS_FILE}")
+            except Exception as e:
+                print(f"Failed to load secrets: {e}")
+        else:
+            print(f"[{get_timestamp()}] [Jarvis] Secrets not found at {SECRETS_FILE}")
         
     def set_sampling_callback(self, callback: Callable[[Any], Any]):
         self.sampling_callback = callback
@@ -529,20 +611,7 @@ class GlobalConnectionManager:
             try:
                 current_mtime = os.path.getmtime(CONFIG_FILE)
                 
-                with open(CONFIG_FILE, 'r') as f:
-                    content = f.read()
-                
-                # Remove comments (simple approach: lines starting with // or #)
-                lines = content.splitlines()
-                clean_lines = []
-                for line in lines:
-                    stripped = line.strip()
-                    if stripped.startswith("//") or stripped.startswith("#"):
-                        continue
-                    clean_lines.append(line)
-                
-                clean_content = "\n".join(clean_lines)
-                config = json.loads(clean_content)
+                config = self._read_json_with_comments(CONFIG_FILE)
 
                 # Debug: show configured MCP servers (redact header values)
                 try:
@@ -668,6 +737,58 @@ class GlobalConnectionManager:
                 print(f"Failed to load secrets: {e}")
         else:
             print(f"[{get_timestamp()}] [Jarvis] Secrets not found at {SECRETS_FILE}")
+
+    async def ensure_server_connected(self, server_name: str, timeout_seconds: float = 8.0) -> bool:
+        """
+        Lazily connect a single persisted server on demand.
+        Returns True when session is ready, else False.
+        """
+        server_key = (server_name or "").lower()
+        if not server_key:
+            return False
+
+        conn = self.connections.get(server_key)
+        if conn and conn.session:
+            return True
+
+        # If missing, create connection from persisted config (case-insensitive lookup).
+        if not conn:
+            persisted = self.get_persisted_mcp_servers()
+            matched_name = None
+            matched_details = None
+            for name, details in persisted.items():
+                if (name or "").lower() == server_key:
+                    matched_name = name
+                    matched_details = details
+                    break
+
+            if not matched_name or not isinstance(matched_details, dict):
+                return False
+
+            try:
+                await self.add_server(
+                    matched_name,
+                    matched_details["url"],
+                    matched_details.get("headers"),
+                    matched_details.get("transport", "sse"),
+                    save=False,
+                    skip_ssl_verify=_detail_skip_ssl_verify(matched_details),
+                    protocol_version=_detail_protocol_version(matched_details),
+                )
+            except Exception as e:
+                print(f"[{get_timestamp()}] [Jarvis] Failed lazy-connecting @{server_name}: {e}")
+                return False
+
+            conn = self.connections.get(server_key)
+            if not conn:
+                return False
+
+        deadline = time.time() + max(timeout_seconds, 0.1)
+        while time.time() < deadline:
+            if conn.session:
+                return True
+            await asyncio.sleep(0.1)
+        return bool(conn.session)
 
     async def watch_config(self):
         # Prevent multiple watcher instances
@@ -892,6 +1013,21 @@ class GlobalConnectionManager:
                 raise RuntimeError(
                     f"MCP connection to '{conn.display_name}' was lost (SSE/stream closed). "
                     "Wait for reconnect or use Connect again."
+                ) from e
+            if _is_malformed_jsonrpc_error(e):
+                print(
+                    f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> "
+                    f"{type(e).__name__} (malformed JSON-RPC payload; clearing session and tool cache)",
+                    flush=True,
+                )
+                conn.session = None
+                conn.tools_cache = None
+                conn.tools_cache_timestamp = 0
+                conn.resources_cache = None
+                conn.prompts_cache = None
+                raise RuntimeError(
+                    f"MCP server '{conn.display_name}' returned malformed JSON. "
+                    "Connection will be retried automatically."
                 ) from e
             print(f"[{get_timestamp()}] [MCP] [{conn.display_name}] Error: call_tool('{tool_name}') -> {type(e).__name__}: {str(e)} ({format_duration(call_start)})")
             raise
