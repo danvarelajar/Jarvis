@@ -835,7 +835,6 @@ async def chat(request: ChatRequest, req: Request):
                         elif item.type == 'image':
                             tool_output += "[Image Content]"
                 else:
-                    import json
                     try:
                         tool_output = json.dumps(result.model_dump() if hasattr(result, 'model_dump') else result, separators=(',', ':'))
                     except Exception:
@@ -960,7 +959,6 @@ async def chat(request: ChatRequest, req: Request):
                             if msg_role == "user" and "Tool Result:" in msg_content:
                                 print(f"[{get_timestamp()}] [WEATHER_FLOW] Found potential tool result at message index {len(current_messages) - idx - 1}", flush=True)
                                 try:
-                                    import json
                                     # Extract tool result - handle different formats
                                     content = prev_msg.get("content", "")
                                     tool_result_text = content.split("Tool Result:")[-1]
@@ -1006,7 +1004,6 @@ async def chat(request: ChatRequest, req: Request):
                                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Checking assistant message {msg_idx}, length: {len(content)}, contains LOCATIONS_DATA: {'LOCATIONS_DATA:' in content}", flush=True)
                                     if "LOCATIONS_DATA:" in content:
                                         try:
-                                            import json
                                             import re
                                             # Extract JSON from HTML comment - try multiple patterns
                                             # Pattern 1: Standard HTML comment
@@ -1536,7 +1533,6 @@ async def chat(request: ChatRequest, req: Request):
 
             # Prevent infinite loops: Check if we already called this tool with these args
             # We need to serialize args to check for equality
-            import json
             tool_signature = (canonical_tool_name.lower(), json.dumps(tool_call.arguments, sort_keys=True))
             
             # Initialize history if not present (using a local variable outside the loop would be better, 
@@ -1760,7 +1756,6 @@ async def chat(request: ChatRequest, req: Request):
 
                 # Commit tools require approval before execution (intercept and return pending approval)
                 if canonical_tool_name in COMMIT_TOOLS:
-                    import json
                     pending_payload = {
                         "tool": canonical_tool_name,
                         "arguments": dict(tool_call.arguments),
@@ -1777,7 +1772,6 @@ async def chat(request: ChatRequest, req: Request):
                     return {"role": "assistant", "content": pending_msg}
 
                 # Log tool execution (this is before the MCP call, which will also log)
-                import json
                 args_preview = json.dumps(tool_call.arguments, separators=(',', ':'))[:100]
                 tool_exec_start = time.time()
                 print(f"[{get_timestamp()}] [TOOL] Executing '{canonical_tool_name}' on server '{server_to_call}' (args: {args_preview}...)", flush=True)
@@ -1821,7 +1815,6 @@ async def chat(request: ChatRequest, req: Request):
                 else:
                     # Try to serialize as compact JSON if it's a list or dict
                     try:
-                        import json
                         # If result is a Pydantic model or similar, try model_dump
                         if hasattr(result, 'model_dump'):
                             data = result.model_dump()
@@ -1839,7 +1832,6 @@ async def chat(request: ChatRequest, req: Request):
                 error_message = ""
                 try:
                     # Try to parse as JSON to check for error responses
-                    import json
                     parsed_output = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
                     if isinstance(parsed_output, dict):
                         # Check for common error fields in JSON responses
@@ -1886,7 +1878,6 @@ async def chat(request: ChatRequest, req: Request):
                     # Step 1 completed: Check if multiple locations returned
                     try:
                         # Try to parse coordinates from tool output
-                        import json
                         result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
                         
                         # Check if result is an array with multiple locations
@@ -1943,7 +1934,6 @@ async def chat(request: ChatRequest, req: Request):
                             
                             # Add tool result to messages so it's available for selection detection in next request
                             # Store the raw tool output as JSON so we can parse it later
-                            import json
                             tool_result_json = json.dumps(result_data, separators=(',', ':'))
                             tool_result_msg = f"Tool Result: {tool_result_json}"
                             current_messages.append({"role": "assistant", "content": response_content})
@@ -2016,7 +2006,6 @@ async def chat(request: ChatRequest, req: Request):
                     if weather_flow_state == "need_search":
                         print(f"[{get_timestamp()}] [WEATHER_FLOW] State still 'need_search' after search_location - attempting coordinate extraction", flush=True)
                         try:
-                            import json
                             result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
                             if isinstance(result_data, list) and len(result_data) > 0:
                                 result_data = result_data[0]
@@ -2039,7 +2028,6 @@ async def chat(request: ChatRequest, req: Request):
                             print(f"[{get_timestamp()}] [WEATHER_FLOW] Step 2 coords in system prompt: lat={lat}, lon={lon}", flush=True)
                         else:
                             try:
-                                import json
                                 result_data = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
                                 if isinstance(result_data, list) and len(result_data) > 0:
                                     result_data = result_data[0]
