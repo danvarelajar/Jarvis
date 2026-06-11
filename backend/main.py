@@ -32,12 +32,12 @@ from .mcp_client import (
     parse_all_server_routes,
     parse_server_route,
 )
-from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url, PromptContext, ToolCall
+from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url, PromptContext
 
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-proactive-weather"
+AGENT_BUILD_ID = "8.0.1-weather-forecast"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -58,6 +58,50 @@ def is_jarvis_error_echo(text: str) -> bool:
     return any(marker in low for marker in _JARVIS_ERROR_MARKERS)
 
 
+_WEATHER_SELECTION_MARKERS = (
+    "locations matching your search",
+    "please specify which location",
+)
+
+
+def is_weather_selection_echo(text: str) -> bool:
+    low = (text or "").lower()
+    return any(marker in low for marker in _WEATHER_SELECTION_MARKERS)
+
+
+def sanitize_weather_selection_history(messages: list) -> list:
+    """Replace location-picker UI in history so small models don't echo it on forecast step."""
+    sanitized = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if msg.get("role") == "assistant" and (
+            "locations matching your search" in content or "LOCATIONS_DATA:" in content
+        ):
+            sanitized.append({
+                **msg,
+                "content": (
+                    "[System: Multiple locations were found earlier. The user has selected one. "
+                    "Do NOT show the list again. Call weather__get_complete_forecast with the "
+                    "coordinates from the session instructions.]"
+                ),
+            })
+            continue
+        sanitized.append(msg)
+    return sanitized
+
+
+def weather_forecast_coords_tuple(
+    weather_coordinates: Optional[dict],
+    pending_coords: Optional[tuple] = None,
+) -> Optional[tuple]:
+    if weather_coordinates:
+        lat = weather_coordinates.get("latitude")
+        lon = weather_coordinates.get("longitude")
+        if lat is not None and lon is not None:
+            return (float(lat), float(lon))
+    return pending_coords
+
+
 def sanitize_messages_for_tool_use(messages: list) -> list:
     """Remove prior assistant error boilerplate that small models tend to repeat."""
     cleaned = []
@@ -66,18 +110,6 @@ def sanitize_messages_for_tool_use(messages: list) -> list:
             continue
         cleaned.append(msg)
     return cleaned
-
-
-def extract_weather_city(user_message: str) -> Optional[str]:
-    """Best-effort city extraction from a natural-language weather query."""
-    text = re.sub(r"@\w+\b", "", user_message or "", flags=re.IGNORECASE).strip()
-    m = re.search(r"\b(?:in|for|at)\s+([A-Za-z][A-Za-z\s\-']{0,40})", text, re.IGNORECASE)
-    if m:
-        city = m.group(1).strip().rstrip("?.!,")
-        city = city.split(",")[0].strip()
-        if city and city.lower() not in {"the", "a", "an", "today", "tomorrow", "weather"}:
-            return city.title() if city.islower() else city
-    return None
 
 
 def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]]) -> str:
@@ -1087,20 +1119,23 @@ async def chat(request: ChatRequest, req: Request):
                                     lat = selected_location.get("latitude")
                                     lon = selected_location.get("longitude")
                                     if lat is not None and lon is not None:
-                                        weather_coordinates = {"latitude": float(lat), "longitude": float(lon)}
-                                        weather_flow_state = "need_forecast"
-                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Selection processed successfully!", flush=True)
-                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Selected location: {selected_location.get('name')} (index {selected_location.get('index')})", flush=True)
-                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Coordinates: lat={lat}, lon={lon}", flush=True)
-                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] State updated to: need_forecast", flush=True)
-                                        
-                                        # Add explicit instruction to LLM to call get_complete_forecast with selected coordinates
                                         location_display = selected_location.get('name', 'Unknown')
                                         if selected_location.get('state'):
                                             location_display += f", {selected_location.get('state')}"
                                         if selected_location.get('country'):
                                             location_display += f", {selected_location.get('country')}"
-                                        
+
+                                        weather_coordinates = {
+                                            "latitude": float(lat),
+                                            "longitude": float(lon),
+                                            "location": location_display,
+                                        }
+                                        weather_flow_state = "need_forecast"
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Selection processed successfully!", flush=True)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Selected location: {selected_location.get('name')} (index {selected_location.get('index')})", flush=True)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] Coordinates: lat={lat}, lon={lon}", flush=True)
+                                        print(f"[{get_timestamp()}] [WEATHER_FLOW] State updated to: need_forecast", flush=True)
+
                                         pending_weather_coords = (float(lat), float(lon))
                                         pending_weather_location = location_display
                                         print(f"[{get_timestamp()}] [WEATHER_FLOW] ✓ Set system prompt for get_complete_forecast", flush=True)
@@ -1132,7 +1167,38 @@ async def chat(request: ChatRequest, req: Request):
         
         # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
-        
+
+        if weather_flow_state == "need_forecast" and weather_coordinates:
+            forecast_tools = [
+                t for t in tools_to_send if t.get("name") == "weather__get_complete_forecast"
+            ]
+            if forecast_tools:
+                tools_to_send = forecast_tools
+                print(
+                    f"[{get_timestamp()}] [WEATHER_FLOW] Step 2: exposing only weather__get_complete_forecast",
+                    flush=True,
+                )
+            current_messages = sanitize_weather_selection_history(current_messages)
+            lat = weather_coordinates["latitude"]
+            lon = weather_coordinates["longitude"]
+            loc_name = weather_coordinates.get("location") or "selected location"
+            forecast_instruction = (
+                f"Weather location confirmed: {loc_name} (latitude={lat}, longitude={lon}).\n"
+                "Call weather__get_complete_forecast with these coordinates NOW.\n"
+                f'Output ONLY JSON: {{"tool": "weather__get_complete_forecast", "arguments": '
+                f'{{"latitude": {lat}, "longitude": {lon}}}}}'
+            )
+            if not any(
+                "weather__get_complete_forecast" in (m.get("content") or "")
+                for m in current_messages
+                if m.get("role") == "user"
+            ):
+                current_messages.append({"role": "user", "content": forecast_instruction})
+                print(
+                    f"[{get_timestamp()}] [WEATHER_FLOW] Injected forecast instruction for LLM",
+                    flush=True,
+                )
+
         # Meta-question: "what tools available?" -> text-only, list tools (no tool call)
         # Works for @booking, @weather, any @server - prevents LLM from incorrectly calling a tool
         msg_low = user_message.lower()
@@ -1238,8 +1304,12 @@ async def chat(request: ChatRequest, req: Request):
         post_tool_mode = None
         active_correction = turn_correction
         turn_correction = ""
-        active_weather_coords = pending_weather_coords
-        active_weather_location = pending_weather_location
+        active_weather_coords = weather_forecast_coords_tuple(
+            weather_coordinates, pending_weather_coords
+        )
+        active_weather_location = (
+            (weather_coordinates or {}).get("location") or pending_weather_location
+        )
         pending_weather_coords = None
         pending_weather_location = ""
 
@@ -1258,81 +1328,55 @@ async def chat(request: ChatRequest, req: Request):
             post_tool_mode=active_post_tool,
         )
 
-        proactive_tool_call = None
-        if (
-            turn_index == 0
-            and weather_flow_state == "need_search"
-            and tools_to_send
-            and not loop_detected
-        ):
-            proactive_city = extract_weather_city(user_message)
-            if proactive_city and any(
-                t.get("name") == "weather__search_location" for t in tools_to_send
-            ):
-                proactive_tool_call = ToolCall(
-                    tool="weather__search_location",
-                    arguments={"city": proactive_city},
-                )
-                print(
-                    f"[{get_timestamp()}] [WEATHER_FLOW] Proactive weather__search_location "
-                    f"(city={proactive_city!r}) — skipping LLM for step 1",
-                    flush=True,
-                )
+        if active_correction:
+            current_messages.append({"role": "user", "content": active_correction})
+        messages_to_send = current_messages.copy()
 
-        if proactive_tool_call:
-            response_content = json.dumps(
-                {
-                    "tool": proactive_tool_call.tool,
-                    "arguments": proactive_tool_call.arguments,
-                },
-                separators=(",", ":"),
-            )
-            parsed_response = {"type": "tool_call", "data": proactive_tool_call}
-            print(f"[{get_timestamp()}] [DEBUG] Skipped LLM — using proactive weather tool call", flush=True)
-        else:
-            if active_correction:
-                current_messages.append({"role": "user", "content": active_correction})
-            messages_to_send = current_messages.copy()
+        response_content = await query_llm(
+            messages_to_send,
+            tools_to_send,
+            api_key=api_key,
+            provider=connection_manager.llm_provider,
+            model_url=connection_manager.ollama_url,
+            model_name=model_name,
+            use_qwen_rag=use_qwen_rag,
+            skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
+            prompt_context=turn_context,
+        )
+        print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
 
-            response_content = await query_llm(
-                messages_to_send,
-                tools_to_send,
-                api_key=api_key,
-                provider=connection_manager.llm_provider,
-                model_url=connection_manager.ollama_url,
-                model_name=model_name,
-                use_qwen_rag=use_qwen_rag,
-                skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
-                prompt_context=turn_context,
-            )
-            print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
-
-            parse_start = time.time()
-            parsed_response = parse_llm_response(response_content)
-            print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
+        parse_start = time.time()
+        parsed_response = parse_llm_response(response_content)
+        print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
         
         if parsed_response["type"] == "text":
             # Reset format error counter on successful text response
             format_error_retries = 0
             response_text = parsed_response.get("content") or ""
-            response_low = response_text.lower()
-            escalated_to_tool_call = False
 
             # If tools are available, reject text responses (and echoed Jarvis error boilerplate).
             if tools_to_send and not active_post_tool:
                 user_msg_lower = user_message.lower()
                 requires_tool = False
+                has_weather_tools_loaded = any(
+                    "weather" in t.get("name", "").lower() for t in tools_to_send
+                )
+                if weather_flow_state in ("need_search", "need_forecast") and has_weather_tools_loaded:
+                    requires_tool = True
                 if any(keyword in user_msg_lower for keyword in ["weather", "temperature", "forecast", "rain", "snow", "wind"]):
-                    if any("weather" in t.get("name", "").lower() for t in tools_to_send):
+                    if has_weather_tools_loaded:
                         requires_tool = True
                 if any(keyword in user_msg_lower for keyword in ["flight", "hotel", "book", "reservation", "itinerary"]):
                     if any("booking" in t.get("name", "").lower() for t in tools_to_send):
                         requires_tool = True
 
                 echoed_error = is_jarvis_error_echo(response_text)
+                echoed_selection = (
+                    weather_flow_state == "need_forecast"
+                    and is_weather_selection_echo(response_text)
+                )
 
-                if requires_tool or echoed_error:
-                    weather_city = extract_weather_city(user_message)
+                if requires_tool or echoed_error or echoed_selection:
                     if tool_text_retries < MAX_TOOL_TEXT_RETRIES:
                         tool_text_retries += 1
                         print(
@@ -1340,57 +1384,44 @@ async def chat(request: ChatRequest, req: Request):
                             f"(retry {tool_text_retries}/{MAX_TOOL_TEXT_RETRIES})",
                             flush=True,
                         )
-                        if weather_flow_state == "need_search" and weather_city:
+                        forecast_coords = weather_forecast_coords_tuple(weather_coordinates)
+                        if weather_flow_state == "need_forecast" and forecast_coords:
+                            lat, lon = forecast_coords
                             turn_correction = (
-                                f"CRITICAL: Tools ARE connected. Output ONLY this exact JSON (no other text):\n"
-                                f'{{"tool": "weather__search_location", "arguments": {{"city": "{weather_city}"}}}}'
+                                "CRITICAL: The user already selected a location. "
+                                "Do NOT repeat the location list. Tools ARE connected.\n"
+                                "Output ONLY this exact JSON (no other text):\n"
+                                f'{{"tool": "weather__get_complete_forecast", "arguments": '
+                                f'{{"latitude": {lat}, "longitude": {lon}}}}}'
                             )
+                            continue
+                        available_tool_names = [t.get("name", "") for t in tools_to_send]
+                        if weather_flow_state == "need_search" or "weather" in user_msg_lower:
+                            tool_hint = (
+                                "Call weather__search_location NOW. Read the place from the user message "
+                                "(any city or location worldwide) and pass it in the 'city' argument. "
+                                "Tools ARE connected — do NOT say they are unavailable."
+                            )
+                        elif weather_flow_state == "need_forecast":
+                            tool_hint = (
+                                "Call weather__get_complete_forecast with the coordinates "
+                                "from the session instructions. Do NOT ask the user to pick a location again."
+                            )
+                        elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
+                            tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
                         else:
-                            available_tool_names = [t.get("name", "") for t in tools_to_send]
-                            tool_hint = ""
-                            if weather_flow_state == "need_search" or "weather" in user_msg_lower:
-                                tool_hint = (
-                                    "Call weather__search_location NOW with the city from the user request. "
-                                    "Tools ARE connected — do NOT say they are unavailable."
-                                )
-                            elif weather_flow_state == "need_forecast":
-                                tool_hint = (
-                                    "Call weather__get_complete_forecast with the coordinates "
-                                    "from the prior tool result."
-                                )
-                            elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
-                                tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
-                            elif requires_tool:
-                                tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
-                            turn_correction = (
-                                f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
-                                "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
-                                'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
-                            )
+                            tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
+                        turn_correction = (
+                            f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
+                            "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
+                            'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
+                        )
                         continue
 
-                    if weather_flow_state == "need_search" and weather_city:
-                        print(
-                            f"[{get_timestamp()}] [WEATHER_FLOW] Auto-invoking weather__search_location "
-                            f"(city={weather_city!r}) after {MAX_TOOL_TEXT_RETRIES} LLM text failures",
-                            flush=True,
-                        )
-                        tool_args = {"city": weather_city}
-                        parsed_response = {
-                            "type": "tool_call",
-                            "data": ToolCall(tool="weather__search_location", arguments=tool_args),
-                        }
-                        response_content = json.dumps(
-                            {"tool": "weather__search_location", "arguments": tool_args},
-                            separators=(",", ":"),
-                        )
-                        escalated_to_tool_call = True
-
-            if not escalated_to_tool_call:
-                print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
-                print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
-                print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
-                return {"role": "assistant", "content": parsed_response["content"]}
+            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
+            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
+            print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
+            return {"role": "assistant", "content": parsed_response["content"]}
             
         elif parsed_response["type"] == "error":
             # If tools are available, give the model one more chance with a strict format reminder

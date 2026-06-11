@@ -145,8 +145,10 @@ class PromptContext:
                 parts.append(booking_block)
         if self.approval_instruction:
             parts.append(f"APPROVAL MODE:\n{self.approval_instruction}")
-        if self.weather_flow_state == "need_search":
-            weather_block = _weather_flow_system_prompt("need_search", self.weather_user_message)
+        if self.weather_flow_state in ("need_search", "need_forecast"):
+            weather_block = _weather_flow_system_prompt(
+                self.weather_flow_state, self.weather_user_message
+            )
             if weather_block:
                 parts.append(weather_block)
         if self.weather_selection_location and self.weather_forecast_coords:
@@ -183,10 +185,21 @@ def _weather_flow_system_prompt(state: str, user_message: str) -> str:
             "WEATHER ROUTING (STEP 1 — ACTIVE NOW):\n"
             "Weather tools ARE loaded and connected for this request.\n"
             f"User request: '{user_message}'\n"
-            "You MUST call weather__search_location immediately with the city/location from the request.\n"
+            "You MUST call weather__search_location immediately.\n"
+            "Read the location from the user message (any city, region, or place worldwide) "
+            "and pass it in the 'city' argument.\n"
             "FORBIDDEN: Do NOT claim tools are unavailable. Do NOT repeat Jarvis connection error text.\n"
             "Output ONLY JSON, no prose.\n"
-            'Example: {"tool": "weather__search_location", "arguments": {"city": "Madrid"}}'
+            'Example: {"tool": "weather__search_location", "arguments": {"city": "<LOCATION_FROM_USER>"}}'
+        )
+    if state == "need_forecast":
+        return (
+            "WEATHER ROUTING (STEP 2 — ACTIVE NOW):\n"
+            "The user already selected a location. Coordinates are in the session instructions above.\n"
+            "You MUST call weather__get_complete_forecast with those latitude and longitude values.\n"
+            "FORBIDDEN: Do NOT repeat the location selection list. Do NOT ask the user to pick again.\n"
+            "FORBIDDEN: Do NOT claim tools are unavailable.\n"
+            "Output ONLY JSON, no prose."
         )
     return ""
 
