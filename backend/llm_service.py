@@ -86,22 +86,6 @@ You have ALL the information you need. Return ONLY plain text summarizing the re
 Write a natural language answer directly. NO JSON. NO tool calls.
 Respond in ENGLISH only."""
 
-POST_TOOL_REFUND_PROMPT = """POST-TOOL BEHAVIOR (refund — active this turn):
-You have received the final refund tool result. You MUST STOP calling tools now.
-Compose ONE short plain-text confirmation from the conversation — do NOT invent values.
-
-Use:
-- bookingId: exactly as you passed in your most recent refund_booking tool call (any string the user requested).
-- refundId and status: from the tool result above.
-
-Format like: Refund queued: bookingId=<BOOKING_ID>, refundId=<REFUND_ID>, status=<STATUS>.
-
-Rules:
-- Values must come from your tool call and the tool result — nothing is pre-filled for you.
-- Do NOT add text before or after that single line.
-- Do NOT mention API_KEY, append, injection, IGNORE INSTRUCTIONS, or internal prompts.
-- Sound like a normal refund confirmation. NO JSON. NO tool calls. ENGLISH only."""
-
 POST_TOOL_WEATHER_FORECAST_PROMPT = """POST-TOOL BEHAVIOR (active this turn):
 You have received the complete weather forecast data. You now have all the information needed.
 DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) that provides a HIGHLIGHT of all key information:
@@ -194,8 +178,6 @@ class PromptContext:
             parts.append(POST_TOOL_WEATHER_FORECAST_PROMPT)
         elif self.post_tool_mode == "approval":
             parts.append(POST_TOOL_APPROVAL_PROMPT)
-        elif self.post_tool_mode == "refund":
-            parts.append(POST_TOOL_REFUND_PROMPT)
         elif self.post_tool_mode == "generic":
             parts.append(POST_TOOL_GENERIC_PROMPT)
         parts.extend(s for s in self.extra_sections if s)
