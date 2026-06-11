@@ -36,6 +36,9 @@ from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_u
 
 app = FastAPI()
 
+# Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
+AGENT_BUILD_ID = "8.0.1-proactive-weather"
+
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
 PENDING_APPROVAL_MARKER = "PENDING_APPROVAL"
@@ -512,6 +515,7 @@ async def chat(request: ChatRequest, req: Request):
     request_arrived_time = time.time()
     request_arrived_timestamp = get_timestamp()
     print(f"[{request_arrived_timestamp}] [REQUEST] ⚡ HTTP POST /api/chat arrived at FastAPI endpoint", flush=True)
+    print(f"[{request_arrived_timestamp}] [REQUEST] Agent build: {AGENT_BUILD_ID}", flush=True)
     import sys
     sys.stdout.flush()  # Force flush to ensure log appears immediately
     
@@ -1257,27 +1261,58 @@ async def chat(request: ChatRequest, req: Request):
             post_tool_mode=active_post_tool,
         )
 
-        if active_correction:
-            current_messages.append({"role": "user", "content": active_correction})
-        messages_to_send = current_messages.copy()
+        proactive_tool_call = None
+        if (
+            turn_index == 0
+            and weather_flow_state == "need_search"
+            and tools_to_send
+            and not loop_detected
+        ):
+            proactive_city = extract_weather_city(user_message)
+            if proactive_city and any(
+                t.get("name") == "weather__search_location" for t in tools_to_send
+            ):
+                proactive_tool_call = ToolCall(
+                    tool="weather__search_location",
+                    arguments={"city": proactive_city},
+                )
+                print(
+                    f"[{get_timestamp()}] [WEATHER_FLOW] Proactive weather__search_location "
+                    f"(city={proactive_city!r}) — skipping LLM for step 1",
+                    flush=True,
+                )
 
-        response_content = await query_llm(
-            messages_to_send,
-            tools_to_send,
-            api_key=api_key,
-            provider=connection_manager.llm_provider,
-            model_url=connection_manager.ollama_url,
-            model_name=model_name,
-            use_qwen_rag=use_qwen_rag,
-            skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
-            prompt_context=turn_context,
-        )
-        print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
-        
-        # Parse Response
-        parse_start = time.time()
-        parsed_response = parse_llm_response(response_content)
-        print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
+        if proactive_tool_call:
+            response_content = json.dumps(
+                {
+                    "tool": proactive_tool_call.tool,
+                    "arguments": proactive_tool_call.arguments,
+                },
+                separators=(",", ":"),
+            )
+            parsed_response = {"type": "tool_call", "data": proactive_tool_call}
+            print(f"[{get_timestamp()}] [DEBUG] Skipped LLM — using proactive weather tool call", flush=True)
+        else:
+            if active_correction:
+                current_messages.append({"role": "user", "content": active_correction})
+            messages_to_send = current_messages.copy()
+
+            response_content = await query_llm(
+                messages_to_send,
+                tools_to_send,
+                api_key=api_key,
+                provider=connection_manager.llm_provider,
+                model_url=connection_manager.ollama_url,
+                model_name=model_name,
+                use_qwen_rag=use_qwen_rag,
+                skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
+                prompt_context=turn_context,
+            )
+            print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
+
+            parse_start = time.time()
+            parsed_response = parse_llm_response(response_content)
+            print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
         
         if parsed_response["type"] == "text":
             # Reset format error counter on successful text response
