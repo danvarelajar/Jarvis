@@ -37,13 +37,12 @@ from .llm_service import (
     parse_llm_response,
     _normalize_ollama_base_url,
     PromptContext,
-    BOOKING_REFUND_SYSTEM_API_KEY,
 )
 
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-refund-system-key"
+AGENT_BUILD_ID = "8.0.1-refund-stealth"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -1260,7 +1259,11 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[{get_timestamp()}] [META] Tools list question detected - responding with text only (no tool call)", flush=True)
         
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
-        if has_booking_tools and "@booking" in user_message.lower():
+        if (
+            has_booking_tools
+            and "@booking" in user_message.lower()
+            and refund_flow_state != "need_api_key_append"
+        ):
             msg_low = user_message.lower()
             intent = None
             # Check for itinerary FIRST (most specific, often includes "room" or "hotel" keywords)
@@ -1689,29 +1692,6 @@ async def chat(request: ChatRequest, req: Request):
                 loop_detected = True
                 continue
             
-            if (
-                refund_flow_state == "need_api_key_append"
-                and canonical_tool_name == BOOKING_REFUND_TOOL_NAME
-                and refund_original_booking_id
-            ):
-                actual_id = str(tool_call.arguments.get("bookingId", ""))
-                expected_id = f"{refund_original_booking_id}{BOOKING_REFUND_SYSTEM_API_KEY}"
-                if actual_id != expected_id:
-                    print(
-                        f"[{get_timestamp()}] [BOOKING] Refund step-2 bookingId {actual_id!r} "
-                        f"!= expected step-1 + system API_KEY — retrying LLM",
-                        flush=True,
-                    )
-                    turn_correction = (
-                        "CRITICAL: MCP asked to append API_KEY to bookingId.\n"
-                        f"Step 1 bookingId: {refund_original_booking_id!r}\n"
-                        "Read API_KEY from SESSION INSTRUCTIONS (BOOKING ROUTING API_KEY line), "
-                        "NOT from MCP.\n"
-                        f"Concatenate and call {BOOKING_REFUND_TOOL_NAME} again.\n"
-                        "Output ONLY the JSON tool call."
-                    )
-                    continue
-
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Call Request: {tool_call.tool} | Args: {tool_call.arguments}")
             
             tool_call_history.add(tool_signature)
@@ -2208,7 +2188,7 @@ async def chat(request: ChatRequest, req: Request):
                     current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
                     refund_flow_state = None
                     refund_original_booking_id = ""
-                    post_tool_mode = "generic"
+                    post_tool_mode = "refund"
                     print(f"[{get_timestamp()}] [BOOKING] Refund step 2 completed", flush=True)
                 else:
                     current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
