@@ -42,6 +42,50 @@ def _is_transport_closed_error(exc: BaseException) -> bool:
     return False
 
 
+def _flatten_exceptions(exc: BaseException) -> List[BaseException]:
+    if isinstance(exc, BaseExceptionGroup):
+        out: List[BaseException] = []
+        for sub in exc.exceptions:
+            out.extend(_flatten_exceptions(sub))
+        return out
+    return [exc]
+
+
+def _classify_connect_failure(exc: BaseException) -> tuple[str, bool, bool]:
+    """
+    Classify MCP connect/initialize failures.
+
+    Returns (message, transport_unreachable, http_status_error).
+    transport_unreachable: true network/protocol errors (may try SSE fallback once).
+    http_status_error: HTTP 4xx/5xx from the MCP endpoint (do not switch transport).
+    """
+    for sub in _flatten_exceptions(exc):
+        if isinstance(sub, httpx.HTTPStatusError):
+            status = sub.response.status_code
+            url = str(sub.request.url)
+            return (
+                f"HTTP {status} from MCP endpoint ({url})",
+                False,
+                True,
+            )
+        msg = str(sub).lower()
+        name = type(sub).__name__
+        if "ConnectError" in name or "RemoteProtocolError" in name:
+            return (str(sub), True, False)
+        if "incomplete chunked read" in msg or "peer closed connection" in msg:
+            return (str(sub), True, False)
+        if (
+            "os error" in msg
+            or "connection refused" in msg
+            or "connect call failed" in msg
+            or "session terminated" in msg
+        ):
+            return (str(sub), True, False)
+    parts = [str(s).strip() or repr(s) for s in _flatten_exceptions(exc)]
+    joined = "; ".join(p for p in parts if p)
+    return (joined or type(exc).__name__, False, False)
+
+
 def _is_malformed_jsonrpc_error(exc: BaseException) -> bool:
     """True when SDK failed to decode/validate a malformed JSON-RPC frame."""
     msg = str(exc).lower()
@@ -223,6 +267,8 @@ class PersistentConnection:
         self.CACHE_TTL = 300  # 5 minutes
         self.LIST_TOOLS_TIMEOUT_SECONDS = 5.0
         self.LIST_TOOLS_MAX_RETRIES = 3
+        self.last_connect_error: Optional[str] = None
+        self._tried_sse_fallback = False
 
     async def start(self):
         # Exponential backoff parameters
@@ -319,60 +365,34 @@ class PersistentConnection:
                             while True:
                                 await asyncio.sleep(1)
             except Exception as e:
-                error_msg = str(e)
-                is_connection_error = False
-                
-                # Helper to check for connection errors in an exception
-                def check_connection_error(exc):
-                    msg = str(exc).lower()
-                    name = type(exc).__name__
-                    if "ConnectError" in name or "RemoteProtocolError" in name:
-                        return True
-                    if "incomplete chunked read" in msg or "peer closed connection" in msg:
-                        return True
-                    return (
-                        "os error" in msg
-                        or "connection refused" in msg
-                        or "connect call failed" in msg
-                        or "session terminated" in msg
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                error_msg, transport_unreachable, http_status_error = _classify_connect_failure(e)
+                self.last_connect_error = error_msg
+                print(
+                    f"[{get_timestamp()}] [MCP] [{self.display_name}] Connection failed: {error_msg}",
+                    flush=True,
+                )
+
+                # Only try HTTP -> SSE once for true transport failures, not HTTP 502/503/etc.
+                if (
+                    transport_unreachable
+                    and self.transport == "http"
+                    and not self._tried_sse_fallback
+                ):
+                    self._tried_sse_fallback = True
+                    print(
+                        f"[{get_timestamp()}] [MCP] [{self.display_name}] "
+                        "Attempting fallback to SSE transport...",
+                        flush=True,
                     )
+                    self.transport = "sse"
+                    backoff_delay = 1
+                    self.session = None
+                    continue
 
-                # Recursively flatten exceptions
-                def get_all_exceptions(exc):
-                    if hasattr(exc, 'exceptions'):
-                        excs = []
-                        for error in exc.exceptions:
-                            excs.extend(get_all_exceptions(error))
-                        return excs
-                    else:
-                        return [exc]
-
-                all_exceptions = get_all_exceptions(e)
-                connections_errors = [exc for exc in all_exceptions if check_connection_error(exc)]
-                
-                if connections_errors:
-                    is_connection_error = True
-                    # Use the first connection error as the main message
-                    error_msg = str(connections_errors[0])
-                else:
-                    # If multiple generic errors, join them
-                    if len(all_exceptions) > 1:
-                        error_msg = f"TaskGroup errors: {'; '.join([str(exc) for exc in all_exceptions])}"
-                        traceback.print_exc() # Print full trace for generic errors
-
-                if is_connection_error:
-                     print(f"Connection error for {self.display_name}: {error_msg}")
-                     
-                     # Fallback logic: If HTTP fails, try SSE
-                     if self.transport == "http":
-                         print(f"Attempting fallback to SSE transport for {self.display_name}...")
-                         self.transport = "sse"
-                         backoff_delay = 1 # Reset backoff for immediate retry
-                         continue # Retry immediately
-                else:
-                     print(f"Connection error for {self.display_name}: {error_msg}")
-                     if not isinstance(e, asyncio.CancelledError):
-                        traceback.print_exc()
+                if not http_status_error and not transport_unreachable:
+                    traceback.print_exc()
 
                 self.session = None
                 # Clear cache on disconnection
@@ -380,7 +400,11 @@ class PersistentConnection:
                 self.resources_cache = None
                 self.prompts_cache = None
                 
-                print(f"Reconnecting to {self.display_name} in {backoff_delay} seconds...")
+                print(
+                    f"[{get_timestamp()}] [MCP] [{self.display_name}] "
+                    f"Reconnecting in {backoff_delay}s...",
+                    flush=True,
+                )
                 await asyncio.sleep(backoff_delay)
                 
                 # Increase backoff
@@ -584,6 +608,34 @@ class GlobalConnectionManager:
                 continue
             clean_lines.append(line)
         return json.loads("\n".join(clean_lines))
+
+    def get_persisted_server_details(self, server_name: str) -> Optional[Dict[str, Any]]:
+        """Case-insensitive lookup of a persisted MCP server entry."""
+        key = (server_name or "").lower()
+        for name, details in self.get_persisted_mcp_servers().items():
+            if (name or "").lower() == key and isinstance(details, dict):
+                return details
+        return None
+
+    def format_server_unreachable_message(self, server_name: str) -> str:
+        """User-facing message when a configured MCP server cannot be reached."""
+        key = (server_name or "").lower()
+        details = self.get_persisted_server_details(server_name)
+        conn = self.connections.get(key)
+        url = (conn.url if conn else None) or (details or {}).get("url", "unknown")
+        err = (conn.last_connect_error if conn else None) or "MCP server did not respond in time"
+        hint = ""
+        if "502" in err or "503" in err or "504" in err:
+            hint = (
+                "\n\nThis usually means the MCP service behind the gateway is down or still starting. "
+                f"Check that the @{server_name} MCP server process is running and healthy."
+            )
+        return (
+            f"The @{server_name} MCP server is configured but could not be reached.\n\n"
+            f"**Endpoint:** {url}\n"
+            f"**Error:** {err}{hint}\n\n"
+            "Wait a moment and try again, or verify the MCP server is up."
+        )
 
     def get_persisted_mcp_servers(self) -> Dict[str, Dict[str, Any]]:
         """Return persisted mcpServers from disk without creating connections."""
