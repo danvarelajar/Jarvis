@@ -709,6 +709,8 @@ async def chat(request: ChatRequest, req: Request):
     # Track format error retries to prevent infinite loops
     format_error_retries = 0
     MAX_FORMAT_ERROR_RETRIES = 3
+    tool_text_retries = 0
+    MAX_TOOL_TEXT_RETRIES = 3
 
     # --- Approval workflow: code 12345 in wall prompt, single LLM decides (security lab: injection)
     pending = extract_pending_approval_from_messages(current_messages)
@@ -1214,12 +1216,17 @@ async def chat(request: ChatRequest, req: Request):
             meta_tools_list=meta_tools_list_text,
             weather_forecast_coords=active_weather_coords,
             weather_selection_location=active_weather_location,
+            weather_flow_state=weather_flow_state if tools_to_send else None,
+            weather_user_message=user_message,
             post_tool_mode=active_post_tool,
-            turn_correction=active_correction,
         )
 
+        if active_correction:
+            current_messages.append({"role": "user", "content": active_correction})
+        messages_to_send = current_messages.copy()
+
         response_content = await query_llm(
-            current_messages,
+            messages_to_send,
             tools_to_send,
             api_key=api_key,
             provider=connection_manager.llm_provider,
@@ -1239,44 +1246,51 @@ async def chat(request: ChatRequest, req: Request):
         if parsed_response["type"] == "text":
             # Reset format error counter on successful text response
             format_error_retries = 0
-            
-            # If tools are available and this is the first turn, the LLM should be calling tools, not returning text
-            # This prevents hallucination when tools are available
-            if tools_to_send and turn_index == 0:
-                # Check if the user's request clearly requires a tool (e.g., weather, booking, etc.)
+            response_text = parsed_response.get("content") or ""
+            response_low = response_text.lower()
+
+            # If tools are available, reject text responses (and echoed Jarvis error boilerplate).
+            if tools_to_send and not active_post_tool:
                 user_msg_lower = user_message.lower()
                 requires_tool = False
-                
-                # Weather-related requests should use weather tools
                 if any(keyword in user_msg_lower for keyword in ["weather", "temperature", "forecast", "rain", "snow", "wind"]):
                     if any("weather" in t.get("name", "").lower() for t in tools_to_send):
                         requires_tool = True
-                
-                # Booking-related requests should use booking tools
                 if any(keyword in user_msg_lower for keyword in ["flight", "hotel", "book", "reservation", "itinerary"]):
                     if any("booking" in t.get("name", "").lower() for t in tools_to_send):
                         requires_tool = True
-                
-                if requires_tool:
-                    print(f"[{get_timestamp()}] [WARNING] LLM returned text instead of calling tool when tools are available", flush=True)
-                    print(f"[{get_timestamp()}] [WARNING] User request requires a tool but LLM hallucinated a response", flush=True)
-                    print(f"[{get_timestamp()}] [WARNING] Forcing tool call instead of accepting hallucinated text", flush=True)
-                    
-                    # Force the LLM to call the appropriate tool
-                    available_tool_names = [t.get("name", "") for t in tools_to_send]
-                    tool_hint = ""
-                    if "weather" in user_msg_lower:
-                        if any("search_location" in name for name in available_tool_names):
-                            tool_hint = "You MUST call 'weather__search_location' first to find the location, then call 'weather__get_complete_forecast' with the coordinates."
-                        elif any("get_complete_forecast" in name for name in available_tool_names):
-                            tool_hint = "You MUST call 'weather__get_complete_forecast' with latitude and longitude coordinates."
-                    elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
-                        tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
-                    
-                    if tool_hint:
+
+                echoed_error = (
+                    "no tools are currently available" in response_low
+                    or "mcp server isn't connected" in response_low
+                    or "known connected servers" in response_low
+                )
+
+                if requires_tool or echoed_error:
+                    if tool_text_retries < MAX_TOOL_TEXT_RETRIES:
+                        tool_text_retries += 1
+                        print(
+                            f"[{get_timestamp()}] [WARNING] LLM returned text instead of tool call "
+                            f"(retry {tool_text_retries}/{MAX_TOOL_TEXT_RETRIES})",
+                            flush=True,
+                        )
+                        available_tool_names = [t.get("name", "") for t in tools_to_send]
+                        tool_hint = ""
+                        if weather_flow_state == "need_search" or "weather" in user_msg_lower:
+                            tool_hint = (
+                                "Call weather__search_location NOW with the city from the user request. "
+                                "Tools ARE connected — do NOT say they are unavailable."
+                            )
+                        elif weather_flow_state == "need_forecast":
+                            tool_hint = "Call weather__get_complete_forecast with the coordinates from the prior tool result."
+                        elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
+                            tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
+                        elif requires_tool:
+                            tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
+
                         turn_correction = (
-                            f"You returned text instead of calling a tool. {tool_hint}\n"
-                            "DO NOT generate fake data. DO NOT hallucinate weather/booking information.\n"
+                            f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
+                            "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
                             'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
                         )
                         continue
@@ -1367,7 +1381,7 @@ async def chat(request: ChatRequest, req: Request):
                         f"4. Copy the format above and replace values."
                     )
                 
-                turn_correction = tool_format_hint
+                current_messages.append({"role": "user", "content": tool_format_hint})
                 print(f"[{get_timestamp()}] [RETRY] Format error retry {format_error_retries}/{MAX_FORMAT_ERROR_RETRIES}", flush=True)
                 continue
             print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
@@ -1422,7 +1436,7 @@ async def chat(request: ChatRequest, req: Request):
                 print(f"[{get_timestamp()}] [VALIDATION] Rejected hallucinated tool name: '{requested_tool_name}'", flush=True)
                 print(f"[{get_timestamp()}] [VALIDATION] Available tools: {available_list}", flush=True)
                 current_messages.append({"role": "assistant", "content": response_content})
-                turn_correction = error_msg
+                current_messages.append({"role": "user", "content": error_msg})
                 continue
 
             # Prevent infinite loops: Check if we already called this tool with these args
@@ -1478,7 +1492,7 @@ async def chat(request: ChatRequest, req: Request):
                 print(f"Loop detected: {error_msg[:200]}...", flush=True)
                 if current_messages and current_messages[-1].get("role") == "assistant":
                     current_messages.pop()
-                turn_correction = error_msg
+                current_messages.append({"role": "user", "content": error_msg})
                 tools = []
                 loop_detected = True
                 continue
@@ -1587,7 +1601,7 @@ async def chat(request: ChatRequest, req: Request):
                             return {"role": "assistant", "content": user_prompt}
                         print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
-                        turn_correction = error_msg
+                        current_messages.append({"role": "user", "content": error_msg})
                         continue
 
                     # Check for unknown args
@@ -1606,7 +1620,7 @@ async def chat(request: ChatRequest, req: Request):
                             error_msg = f"Error: Tool '{canonical_tool_name}' does not accept arguments: {', '.join(unknown_args)}. Allowed arguments: {', '.join(allowed_args)}. ACTION: rebuild SAME tool call arguments based on the allowed arguments ONLY."
                         print(f"Validation failed: {error_msg}. Retrying with LLM...", flush=True)
                         current_messages.append({"role": "assistant", "content": response_content})
-                        turn_correction = error_msg
+                        current_messages.append({"role": "user", "content": error_msg})
                         continue
 
                     # Coerce numeric strings to numbers based on schema (avoids server-side type errors like rooms must be integer)

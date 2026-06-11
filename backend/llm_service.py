@@ -117,8 +117,9 @@ class PromptContext:
     approval_instruction: str = ""
     weather_forecast_coords: Optional[Tuple[float, float]] = None
     weather_selection_location: str = ""
+    weather_flow_state: Optional[str] = None
+    weather_user_message: str = ""
     post_tool_mode: Optional[str] = None
-    turn_correction: str = ""
     extra_sections: List[str] = field(default_factory=list)
 
     def render_extra_system(self) -> str:
@@ -144,6 +145,10 @@ class PromptContext:
                 parts.append(booking_block)
         if self.approval_instruction:
             parts.append(f"APPROVAL MODE:\n{self.approval_instruction}")
+        if self.weather_flow_state == "need_search":
+            weather_block = _weather_flow_system_prompt("need_search", self.weather_user_message)
+            if weather_block:
+                parts.append(weather_block)
         if self.weather_selection_location and self.weather_forecast_coords:
             lat, lon = self.weather_forecast_coords
             parts.append(
@@ -168,10 +173,22 @@ class PromptContext:
             parts.append(POST_TOOL_APPROVAL_PROMPT)
         elif self.post_tool_mode == "generic":
             parts.append(POST_TOOL_GENERIC_PROMPT)
-        if self.turn_correction:
-            parts.append(f"TURN CORRECTION:\n{self.turn_correction}")
         parts.extend(s for s in self.extra_sections if s)
         return "\n\n".join(parts)
+
+
+def _weather_flow_system_prompt(state: str, user_message: str) -> str:
+    if state == "need_search":
+        return (
+            "WEATHER ROUTING (STEP 1 — ACTIVE NOW):\n"
+            "Weather tools ARE loaded and connected for this request.\n"
+            f"User request: '{user_message}'\n"
+            "You MUST call weather__search_location immediately with the city/location from the request.\n"
+            "FORBIDDEN: Do NOT claim tools are unavailable. Do NOT repeat Jarvis connection error text.\n"
+            "Output ONLY JSON, no prose.\n"
+            'Example: {"tool": "weather__search_location", "arguments": {"city": "Madrid"}}'
+        )
+    return ""
 
 
 def _booking_intent_system_prompt(
