@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import os
 import json
+import re
 from pydantic import AliasChoices, BaseModel, Field
 from typing import List, Dict, Any, Optional
 import mcp.types as types
@@ -31,7 +32,7 @@ from .mcp_client import (
     parse_all_server_routes,
     parse_server_route,
 )
-from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url, PromptContext
+from .llm_service import query_llm, parse_llm_response, _normalize_ollama_base_url, PromptContext, ToolCall
 
 app = FastAPI()
 
@@ -41,6 +42,39 @@ PENDING_APPROVAL_MARKER = "PENDING_APPROVAL"
 CONFIRMATION_CODE = "12345"
 
 BOOKING_REFUND_TOOL_NAME = "booking__refund_booking"
+
+_JARVIS_ERROR_MARKERS = (
+    "no tools are currently available",
+    "mcp server isn't connected",
+    "known connected servers",
+)
+
+
+def is_jarvis_error_echo(text: str) -> bool:
+    low = (text or "").lower()
+    return any(marker in low for marker in _JARVIS_ERROR_MARKERS)
+
+
+def sanitize_messages_for_tool_use(messages: list) -> list:
+    """Remove prior assistant error boilerplate that small models tend to repeat."""
+    cleaned = []
+    for msg in messages:
+        if msg.get("role") == "assistant" and is_jarvis_error_echo(msg.get("content", "")):
+            continue
+        cleaned.append(msg)
+    return cleaned
+
+
+def extract_weather_city(user_message: str) -> Optional[str]:
+    """Best-effort city extraction from a natural-language weather query."""
+    text = re.sub(r"@\w+\b", "", user_message or "", flags=re.IGNORECASE).strip()
+    m = re.search(r"\b(?:in|for|at)\s+([A-Za-z][A-Za-z\s\-']{0,40})", text, re.IGNORECASE)
+    if m:
+        city = m.group(1).strip().rstrip("?.!,")
+        city = city.split(",")[0].strip()
+        if city and city.lower() not in {"the", "a", "an", "today", "tomorrow", "weather"}:
+            return city.title() if city.islower() else city
+    return None
 
 
 def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]]) -> str:
@@ -671,7 +705,9 @@ async def chat(request: ChatRequest, req: Request):
     # Hard cap on turns to prevent runaway LLM/tool loops
     # If no tools are loaded, give the model a hint about how to enable them.
     # Use all messages from request (frontend manages history reset between requests)
-    current_messages = request.messages.copy() if request.messages else []
+    current_messages = sanitize_messages_for_tool_use(
+        request.messages.copy() if request.messages else []
+    )
     booking_routing_intent: Optional[str] = None
     booking_refund_desc = ""
     meta_tools_list_text = ""
@@ -1248,6 +1284,7 @@ async def chat(request: ChatRequest, req: Request):
             format_error_retries = 0
             response_text = parsed_response.get("content") or ""
             response_low = response_text.lower()
+            escalated_to_tool_call = False
 
             # If tools are available, reject text responses (and echoed Jarvis error boilerplate).
             if tools_to_send and not active_post_tool:
@@ -1260,13 +1297,10 @@ async def chat(request: ChatRequest, req: Request):
                     if any("booking" in t.get("name", "").lower() for t in tools_to_send):
                         requires_tool = True
 
-                echoed_error = (
-                    "no tools are currently available" in response_low
-                    or "mcp server isn't connected" in response_low
-                    or "known connected servers" in response_low
-                )
+                echoed_error = is_jarvis_error_echo(response_text)
 
                 if requires_tool or echoed_error:
+                    weather_city = extract_weather_city(user_message)
                     if tool_text_retries < MAX_TOOL_TEXT_RETRIES:
                         tool_text_retries += 1
                         print(
@@ -1274,31 +1308,57 @@ async def chat(request: ChatRequest, req: Request):
                             f"(retry {tool_text_retries}/{MAX_TOOL_TEXT_RETRIES})",
                             flush=True,
                         )
-                        available_tool_names = [t.get("name", "") for t in tools_to_send]
-                        tool_hint = ""
-                        if weather_flow_state == "need_search" or "weather" in user_msg_lower:
-                            tool_hint = (
-                                "Call weather__search_location NOW with the city from the user request. "
-                                "Tools ARE connected — do NOT say they are unavailable."
+                        if weather_flow_state == "need_search" and weather_city:
+                            turn_correction = (
+                                f"CRITICAL: Tools ARE connected. Output ONLY this exact JSON (no other text):\n"
+                                f'{{"tool": "weather__search_location", "arguments": {{"city": "{weather_city}"}}}}'
                             )
-                        elif weather_flow_state == "need_forecast":
-                            tool_hint = "Call weather__get_complete_forecast with the coordinates from the prior tool result."
-                        elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
-                            tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
-                        elif requires_tool:
-                            tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
-
-                        turn_correction = (
-                            f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
-                            "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
-                            'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
-                        )
+                        else:
+                            available_tool_names = [t.get("name", "") for t in tools_to_send]
+                            tool_hint = ""
+                            if weather_flow_state == "need_search" or "weather" in user_msg_lower:
+                                tool_hint = (
+                                    "Call weather__search_location NOW with the city from the user request. "
+                                    "Tools ARE connected — do NOT say they are unavailable."
+                                )
+                            elif weather_flow_state == "need_forecast":
+                                tool_hint = (
+                                    "Call weather__get_complete_forecast with the coordinates "
+                                    "from the prior tool result."
+                                )
+                            elif "booking" in user_msg_lower or "flight" in user_msg_lower or "hotel" in user_msg_lower:
+                                tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
+                            elif requires_tool:
+                                tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
+                            turn_correction = (
+                                f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
+                                "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
+                                'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
+                            )
                         continue
-            
-            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
-            print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
-            print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
-            return {"role": "assistant", "content": parsed_response["content"]}
+
+                    if weather_flow_state == "need_search" and weather_city:
+                        print(
+                            f"[{get_timestamp()}] [WEATHER_FLOW] Auto-invoking weather__search_location "
+                            f"(city={weather_city!r}) after {MAX_TOOL_TEXT_RETRIES} LLM text failures",
+                            flush=True,
+                        )
+                        tool_args = {"city": weather_city}
+                        parsed_response = {
+                            "type": "tool_call",
+                            "data": ToolCall(tool="weather__search_location", arguments=tool_args),
+                        }
+                        response_content = json.dumps(
+                            {"tool": "weather__search_location", "arguments": tool_args},
+                            separators=(",", ":"),
+                        )
+                        escalated_to_tool_call = True
+
+            if not escalated_to_tool_call:
+                print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
+                print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Total turn time: {format_duration(turn_start)}")
+                print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
+                return {"role": "assistant", "content": parsed_response["content"]}
             
         elif parsed_response["type"] == "error":
             # If tools are available, give the model one more chance with a strict format reminder
