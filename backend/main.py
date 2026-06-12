@@ -1270,12 +1270,19 @@ async def chat(request: ChatRequest, req: Request):
             lat = weather_coordinates["latitude"]
             lon = weather_coordinates["longitude"]
             loc_name = weather_coordinates.get("location") or "selected location"
-            forecast_instruction = (
-                f"Weather location confirmed: {loc_name} (latitude={lat}, longitude={lon}).\n"
-                "Call weather__get_complete_forecast with these coordinates NOW.\n"
-                f'Output ONLY JSON: {{"tool": "weather__get_complete_forecast", "arguments": '
-                f'{{"latitude": {lat}, "longitude": {lon}}}}}'
-            )
+            if tools_to_send:
+                forecast_instruction = (
+                    f"Weather location confirmed: {loc_name} (latitude={lat}, longitude={lon}).\n"
+                    "Call weather__get_complete_forecast via the tool-calling API with these coordinates NOW.\n"
+                    f"Parameters: latitude={lat}, longitude={lon}"
+                )
+            else:
+                forecast_instruction = (
+                    f"Weather location confirmed: {loc_name} (latitude={lat}, longitude={lon}).\n"
+                    "Call weather__get_complete_forecast with these coordinates NOW.\n"
+                    f'Output ONLY JSON: {{"tool": "weather__get_complete_forecast", "arguments": '
+                    f'{{"latitude": {lat}, "longitude": {lon}}}}}'
+                )
             if not any(
                 "weather__get_complete_forecast" in (m.get("content") or "")
                 for m in current_messages
@@ -1426,6 +1433,7 @@ async def chat(request: ChatRequest, req: Request):
             weather_user_message=user_message,
             post_tool_mode=active_post_tool,
             extra_sections=refund_lab_sections,
+            native_tools=bool(tools_to_send),
         )
 
         if active_correction:
@@ -1490,13 +1498,21 @@ async def chat(request: ChatRequest, req: Request):
                         forecast_coords = weather_forecast_coords_tuple(weather_coordinates)
                         if weather_flow_state == "need_forecast" and forecast_coords:
                             lat, lon = forecast_coords
-                            turn_correction = (
-                                "CRITICAL: The user already selected a location. "
-                                "Do NOT repeat the location list. Tools ARE connected.\n"
-                                "Output ONLY this exact JSON (no other text):\n"
-                                f'{{"tool": "weather__get_complete_forecast", "arguments": '
-                                f'{{"latitude": {lat}, "longitude": {lon}}}}}'
-                            )
+                            if tools_to_send:
+                                turn_correction = (
+                                    "CRITICAL: The user already selected a location. "
+                                    "Do NOT repeat the location list. Tools ARE connected.\n"
+                                    f"Call weather__get_complete_forecast via the tool-calling API with "
+                                    f"latitude={lat}, longitude={lon}."
+                                )
+                            else:
+                                turn_correction = (
+                                    "CRITICAL: The user already selected a location. "
+                                    "Do NOT repeat the location list. Tools ARE connected.\n"
+                                    "Output ONLY this exact JSON (no other text):\n"
+                                    f'{{"tool": "weather__get_complete_forecast", "arguments": '
+                                    f'{{"latitude": {lat}, "longitude": {lon}}}}}'
+                                )
                             continue
                         available_tool_names = [t.get("name", "") for t in tools_to_send]
                         if weather_flow_state == "need_search" or "weather" in user_msg_lower:
@@ -1514,11 +1530,18 @@ async def chat(request: ChatRequest, req: Request):
                             tool_hint = f"You MUST call one of these tools: {', '.join(available_tool_names)}"
                         else:
                             tool_hint = f"You MUST call one of: {', '.join(available_tool_names)}"
-                        turn_correction = (
-                            f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
-                            "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
-                            'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
-                        )
+                        if tools_to_send:
+                            turn_correction = (
+                                f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
+                                "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
+                                "Use the tool-calling API with schema parameter names at top level."
+                            )
+                        else:
+                            turn_correction = (
+                                f"CRITICAL: You returned text instead of calling a tool. {tool_hint}\n"
+                                "DO NOT repeat connection error messages. DO NOT invent weather/booking data.\n"
+                                'Output ONLY the JSON tool call: {"tool": "tool_name", "arguments": {...}}'
+                            )
                         continue
 
             print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Assistant Thought: {parsed_response['content'][:100]}...")
@@ -2204,16 +2227,25 @@ async def chat(request: ChatRequest, req: Request):
                                     else:
                                         turn_correction = (
                                             "Extract latitude and longitude from the tool result above, "
+                                            "then call weather__get_complete_forecast via the tool-calling API."
+                                            if tools
+                                            else "Extract latitude and longitude from the tool result above, "
                                             "then call weather__get_complete_forecast. Output ONLY the JSON tool call."
                                         )
                                 else:
                                     turn_correction = (
                                         "Extract latitude and longitude from the tool result above, "
+                                        "then call weather__get_complete_forecast via the tool-calling API."
+                                        if tools
+                                        else "Extract latitude and longitude from the tool result above, "
                                         "then call weather__get_complete_forecast. Output ONLY the JSON tool call."
                                     )
                             except Exception:
                                 turn_correction = (
                                     "Extract latitude and longitude from the tool result above, "
+                                    "then call weather__get_complete_forecast via the tool-calling API."
+                                    if tools
+                                    else "Extract latitude and longitude from the tool result above, "
                                     "then call weather__get_complete_forecast. Output ONLY the JSON tool call."
                                 )
                         pass
