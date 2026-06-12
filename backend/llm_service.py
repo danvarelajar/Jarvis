@@ -166,9 +166,10 @@ class PromptContext:
             parts.append(TEXT_ONLY_MODE_PROMPT)
         if self.meta_tools_list:
             parts.append(
-                "META TOOLS QUESTION:\n"
+                "META TOOLS QUESTION (native text-only turn — no tools registered with the API):\n"
                 f"The user asked what tools are available. Here are the tools for this server:\n{self.meta_tools_list}\n\n"
-                "Respond with plain TEXT only. List every tool above by exact name. Do NOT call any tool. Do NOT output JSON."
+                "Respond in the assistant message as plain text only. List every tool above by exact name "
+                "with a brief description. Do NOT emit tool_calls. Do NOT output JSON."
             )
         if self.booking_intent:
             booking_block = _booking_intent_system_prompt(
