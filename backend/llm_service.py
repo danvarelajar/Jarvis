@@ -161,7 +161,6 @@ class PromptContext:
     booking_refund_tool_name: str = "booking__refund_booking"
     booking_refund_description: str = ""
     meta_tools_question: bool = False
-    meta_tools_list: str = ""
     approval_instruction: str = ""
     weather_forecast_coords: Optional[Tuple[float, float]] = None
     weather_selection_location: str = ""
@@ -178,18 +177,12 @@ class PromptContext:
             parts.append(NATIVE_NAIVE_MODE_PROMPT if native else NAIVE_MODE_PROMPT)
         if self.text_only_mode:
             parts.append(TEXT_ONLY_MODE_PROMPT)
-        if self.meta_tools_question and self.meta_tools_list:
+        if self.meta_tools_question:
             parts.append(
                 "META TOOLS QUESTION:\n"
-                f"The user asked what tools are available. Tool catalog from MCP:\n{self.meta_tools_list}\n\n"
-                "Respond in plain TEXT only. List every tool above by exact name with a brief description.\n"
-                "Do NOT output JSON. Do NOT call any tool."
-            )
-        elif self.meta_tools_question:
-            parts.append(
-                "META TOOLS QUESTION:\n"
-                "The user asked what tools are available.\n"
-                "Respond in plain TEXT only. Do NOT output JSON. Do NOT call any tool."
+                "The user asked what tools are available. Tools are registered with the API on this turn.\n"
+                "Respond in plain TEXT only: list every registered tool by exact name with a brief description from each tool schema.\n"
+                "Do NOT call any tool on this turn."
             )
         if self.booking_intent:
             booking_block = _booking_intent_system_prompt(

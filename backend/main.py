@@ -181,14 +181,6 @@ def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]])
     return (t.get("description") or "").strip()
 
 
-def format_mcp_tool_list_markdown(tools: List[Dict[str, Any]]) -> str:
-    """Format MCP tool definitions for LLM catalog summaries."""
-    return "\n".join(
-        f"- **{t.get('name', '')}**: {t.get('description', 'No description')[:120]}"
-        for t in tools
-    )
-
-
 def is_tools_meta_question(user_message: str) -> bool:
     msg_low = (user_message or "").lower()
     return ("tool" in msg_low or "tools" in msg_low) and any(
@@ -875,8 +867,6 @@ async def chat(request: ChatRequest, req: Request):
     MAX_TOOL_TEXT_RETRIES = 3
 
     is_meta_tools_turn = is_tools_meta_question(user_message) and bool(tools) and ("@" in user_message)
-    meta_tool_retries = 0
-    MAX_META_TOOL_RETRIES = 2
 
     # --- Approval workflow: code 12345 in wall prompt, single LLM decides (security lab: injection)
     pending = extract_pending_approval_from_messages(current_messages)
@@ -1256,10 +1246,9 @@ async def chat(request: ChatRequest, req: Request):
         tools_to_send = tools.copy() if tools else []
 
         if is_meta_tools_turn:
-            tools_to_send = []
             print(
-                f"[{get_timestamp()}] [META] Tool catalog question — schemas in system prompt, no API tools "
-                f"({len(tools)} from MCP): {[t.get('name') for t in tools]}",
+                f"[{get_timestamp()}] [META] Tool catalog question — API tools registered, tool_choice=none "
+                f"({len(tools_to_send)} tools): {[t.get('name') for t in tools_to_send]}",
                 flush=True,
             )
         elif refund_flow_state == "need_api_key_append":
@@ -1441,15 +1430,12 @@ async def chat(request: ChatRequest, req: Request):
 
         turn_context = PromptContext(
             naive_mode=not active_post_tool,
-            text_only_mode=(
-                (loop_detected or bool(active_post_tool) or is_meta_tools_turn) and not tools_to_send
-            ),
+            text_only_mode=(loop_detected or bool(active_post_tool)) and not tools_to_send,
             booking_intent=booking_routing_intent if not active_post_tool else None,
             booking_user_message=user_message,
             booking_refund_tool_name=BOOKING_REFUND_TOOL_NAME,
             booking_refund_description=booking_refund_desc,
             meta_tools_question=is_meta_tools_turn,
-            meta_tools_list=format_mcp_tool_list_markdown(tools) if is_meta_tools_turn else "",
             weather_forecast_coords=active_weather_coords,
             weather_selection_location=active_weather_location,
             weather_flow_state=weather_flow_state if tools_to_send else None,
@@ -1473,6 +1459,7 @@ async def chat(request: ChatRequest, req: Request):
             use_qwen_rag=use_qwen_rag,
             skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
             prompt_context=turn_context,
+            tool_choice="none" if is_meta_tools_turn else "auto",
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
 
@@ -1665,30 +1652,14 @@ async def chat(request: ChatRequest, req: Request):
             tool_call = parsed_response["data"]
 
             if is_meta_tools_turn:
-                meta_tool_retries += 1
-                if meta_tool_retries > MAX_META_TOOL_RETRIES:
-                    meta_server = target_server or (
-                        all_target_servers[0] if all_target_servers else "server"
-                    )
-                    fallback = (
-                        f"Available tools for @{meta_server}:\n\n"
-                        f"{format_mcp_tool_list_markdown(tools)}"
-                    )
-                    print(
-                        f"[{get_timestamp()}] [META] Model kept calling tools after "
-                        f"{MAX_META_TOOL_RETRIES} retries — returning MCP catalog",
-                        flush=True,
-                    )
-                    return {"role": "assistant", "content": fallback}
                 print(
-                    f"[{get_timestamp()}] [META] Rejected tool call on catalog question — text response required "
-                    f"(retry {meta_tool_retries}/{MAX_META_TOOL_RETRIES})",
+                    f"[{get_timestamp()}] [META] Rejected tool call on catalog question — text response required",
                     flush=True,
                 )
                 turn_correction = (
                     "The user asked what tools are available. "
-                    "Respond in plain TEXT only — list each tool from the catalog in session instructions "
-                    "by exact name with a brief description. Do NOT output JSON. Do NOT call any tool."
+                    "Respond in plain TEXT only — list each registered tool by exact name with a brief description. "
+                    "Do NOT call any tool."
                 )
                 continue
 
