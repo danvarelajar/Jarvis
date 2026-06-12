@@ -133,7 +133,8 @@ One-line description from the tool schema.
 Rules:
 - Use each tool's exact registered name (including any `server__` prefix).
 - Pull descriptions from the tool schema only.
-- No preamble, no JSON, no tool_calls."""
+- No preamble, no JSON, no tool_calls.
+- Do NOT output JSON examples, sample invocations, code blocks with parameters, or invented cities/dates."""
 
 POST_TOOL_GENERIC_PROMPT = """POST-TOOL BEHAVIOR (active this turn):
 You have received a tool result in the conversation. You MUST STOP calling tools now.
@@ -518,6 +519,37 @@ def build_meta_catalog_system_prompt(
             "Use those schemas for names and descriptions."
         )
     return "\n\n".join(parts)
+
+
+def is_valid_meta_catalog_response(text: str, tools: List[dict]) -> bool:
+    """True when LLM output looks like a tool catalog, not sample JSON invocations."""
+    if not text or not text.strip():
+        return False
+    stripped = text.strip()
+    low = text.lower()
+    bad_markers = (
+        '"parameters"',
+        '"arguments"',
+        '"departdate"',
+        '"checkindate"',
+        '"bookingid"',
+        '"passengers"',
+        '"tool":',
+        "```json",
+    )
+    if any(marker in low for marker in bad_markers):
+        return False
+    if stripped.startswith("{") or stripped.startswith("["):
+        return False
+
+    tool_names = [t.get("name", "") for t in tools if t.get("name")]
+    if not tool_names:
+        return True
+    mentioned = sum(
+        1 for name in tool_names if name in text or name.split("__", 1)[-1] in text
+    )
+    min_required = max(2, len(tool_names) - 1) if len(tool_names) > 2 else len(tool_names)
+    return mentioned >= min_required
 
 
 def build_system_prompt(
@@ -1203,10 +1235,7 @@ async def summarize_meta_tools_catalog(
     model_name: str,
     skip_ssl_verify: bool,
 ) -> LLMQueryResult:
-    """
-    Text-only follow-up when a gateway ignores tool_choice=none on catalog questions.
-    Uses the same native OpenAI tool schema JSON as the tools API param, without registering tools.
-    """
+    """Single text-only catalog LLM call using native MCP schemas (no tools API param)."""
     ctx = PromptContext(
         meta_tools_question=True,
         meta_catalog_tools=tools,
@@ -1215,8 +1244,8 @@ async def summarize_meta_tools_catalog(
         native_tools=False,
     )
     print(
-        f"[{get_timestamp()}] [META] Text-only catalog fallback "
-        f"({len(tools)} native schemas, no tools API param)",
+        f"[{get_timestamp()}] [META] Text-only catalog LLM call "
+        f"({len(tools)} schemas, no tools API param)",
         flush=True,
     )
     return await query_llm(

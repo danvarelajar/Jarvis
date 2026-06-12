@@ -38,6 +38,7 @@ from .llm_service import (
     llm_result_to_parsed_response,
     mcp_result_to_tool_content,
     summarize_meta_tools_catalog,
+    is_valid_meta_catalog_response,
     _normalize_ollama_base_url,
     PromptContext,
     BOOKING_REFUND_SYSTEM_API_KEY,
@@ -46,7 +47,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-meta-catalog-slim"
+AGENT_BUILD_ID = "8.0.1-meta-catalog-direct"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -195,6 +196,29 @@ def is_tools_meta_question(user_message: str) -> bool:
     return ("tool" in msg_low or "tools" in msg_low) and any(
         k in msg_low for k in ["available", "list", "what", "which", "show", "can you use"]
     )
+
+
+async def resolve_chat_model_name() -> str:
+    model_name = connection_manager.ollama_model_name
+    if model_name and model_name.strip():
+        return model_name
+    import httpx
+    try:
+        base_url = _normalize_ollama_base_url(connection_manager.ollama_url or "")
+        skip_verify = getattr(connection_manager, "ollama_skip_ssl_verify", False)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0), verify=not skip_verify) as client:
+            response = await client.get(f"{base_url}/v1/models")
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                if data:
+                    first_model = data[0].get("id", "")
+                    if ":" in first_model:
+                        parts = first_model.split(":")
+                        return ":".join(parts[:2]) if len(parts) >= 2 else first_model
+                    return first_model
+    except Exception:
+        pass
+    return ""
 
 
 # Phrase patterns: user is asking something new, not replying to approval prompt
@@ -837,7 +861,6 @@ async def chat(request: ChatRequest, req: Request):
     booking_routing_intent: Optional[str] = None
     booking_refund_desc = ""
     is_meta_tools_turn = False
-    meta_catalog_fallback_done = False
     meta_system_nudge = ""
     pending_weather_coords: Optional[tuple] = None
     pending_weather_location = ""
@@ -991,6 +1014,50 @@ async def chat(request: ChatRequest, req: Request):
             final = (rejection and str(rejection).strip()) or fallback
             print(f"[{get_timestamp()}] [APPROVAL] LLM rejected: {str(final)[:80]}...", flush=True)
             return {"role": "assistant", "content": final}
+
+    if is_tools_meta_question(user_message) and tools and ("@" in user_message):
+        model_name = await resolve_chat_model_name()
+        if not model_name:
+            return {"role": "assistant", "content": "Error: No model configured. Please select a model in settings."}
+        catalog_messages = [{"role": "user", "content": user_message}]
+        print(
+            f"[{get_timestamp()}] [META] Direct catalog path "
+            f"(1 LLM call, fresh context, {len(tools)} tools)",
+            flush=True,
+        )
+        catalog_start = time.time()
+        catalog_llm = await summarize_meta_tools_catalog(
+            catalog_messages,
+            tools,
+            api_key=api_key,
+            provider=connection_manager.llm_provider,
+            model_url=connection_manager.ollama_url,
+            model_name=model_name,
+            skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
+        )
+        catalog_parsed = llm_result_to_parsed_response(catalog_llm)
+        catalog_text = (catalog_parsed.get("content") or "").strip()
+        if (
+            catalog_parsed["type"] == "text"
+            and catalog_text
+            and is_valid_meta_catalog_response(catalog_text, tools)
+        ):
+            print(
+                f"[{get_timestamp()}] [META] Catalog response accepted ({format_duration(catalog_start)})",
+                flush=True,
+            )
+            print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
+            return {"role": "assistant", "content": catalog_text}
+        print(
+            f"[{get_timestamp()}] [META] Catalog response invalid; using deterministic summary "
+            f"({format_duration(catalog_start)})",
+            flush=True,
+        )
+        print(f"[{get_timestamp()}] [REQUEST] Total request time: {format_duration(request_start)}")
+        return {
+            "role": "assistant",
+            "content": format_mcp_tool_list_markdown(tools) or "No tools available.",
+        }
 
     MAX_AGENT_TURNS = 10
     for turn_index in range(MAX_AGENT_TURNS):
@@ -1304,15 +1371,6 @@ async def chat(request: ChatRequest, req: Request):
                     f"[{get_timestamp()}] [WEATHER_FLOW] Injected forecast instruction for LLM",
                     flush=True,
                 )
-
-        # Meta-question: native catalog turn — tools registered via API, tool_choice=none.
-        if is_tools_meta_question(user_message) and tools and ("@" in user_message):
-            is_meta_tools_turn = True
-            print(
-                f"[{get_timestamp()}] [META] Tools list question — native catalog turn "
-                f"(tool_choice=none, {len(tools)} tools): {[t.get('name') for t in tools]}",
-                flush=True,
-            )
 
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
         if (
@@ -1671,48 +1729,6 @@ async def chat(request: ChatRequest, req: Request):
             # Reset format error counter on successful tool call parsing
             format_error_retries = 0
             tool_call = parsed_response["data"]
-
-            if is_meta_tools_turn:
-                assistant_text = (parsed_response.get("assistant_content") or "").strip()
-                if assistant_text:
-                    print(
-                        f"[{get_timestamp()}] [META] Using assistant text alongside spurious tool_call",
-                        flush=True,
-                    )
-                    return {"role": "assistant", "content": assistant_text}
-                print(
-                    f"[{get_timestamp()}] [META] Gateway ignored tool_choice=none "
-                    f"(tool_calls: {[tc.get('name') for tc in llm_result.tool_calls]})",
-                    flush=True,
-                )
-                if not meta_catalog_fallback_done:
-                    meta_catalog_fallback_done = True
-                    fallback_llm = await summarize_meta_tools_catalog(
-                        messages_to_send,
-                        tools,
-                        api_key=api_key,
-                        provider=connection_manager.llm_provider,
-                        model_url=connection_manager.ollama_url,
-                        model_name=model_name,
-                        skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
-                    )
-                    fallback_parsed = llm_result_to_parsed_response(fallback_llm)
-                    fallback_text = (fallback_parsed.get("content") or "").strip()
-                    if fallback_parsed["type"] == "text" and fallback_text:
-                        print(
-                            f"[{get_timestamp()}] [META] Text-only catalog fallback succeeded",
-                            flush=True,
-                        )
-                        return {"role": "assistant", "content": fallback_text}
-                    print(
-                        f"[{get_timestamp()}] [META] Text-only fallback did not return text; "
-                        "using deterministic schema summary",
-                        flush=True,
-                    )
-                return {
-                    "role": "assistant",
-                    "content": format_mcp_tool_list_markdown(tools) or "No tools available.",
-                }
 
             if active_post_tool and refund_flow_state != "need_api_key_append":
                 print(
