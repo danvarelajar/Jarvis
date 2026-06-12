@@ -37,6 +37,7 @@ from .llm_service import (
     parse_llm_response,
     llm_result_to_parsed_response,
     mcp_result_to_tool_content,
+    summarize_meta_tools_catalog,
     _normalize_ollama_base_url,
     PromptContext,
     BOOKING_REFUND_SYSTEM_API_KEY,
@@ -45,7 +46,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-meta-native-tools"
+AGENT_BUILD_ID = "8.0.1-meta-catalog-prompt"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -836,7 +837,7 @@ async def chat(request: ChatRequest, req: Request):
     booking_routing_intent: Optional[str] = None
     booking_refund_desc = ""
     is_meta_tools_turn = False
-    meta_turn_retries = 0
+    meta_catalog_fallback_done = False
     meta_system_nudge = ""
     pending_weather_coords: Optional[tuple] = None
     pending_weather_location = ""
@@ -876,7 +877,6 @@ async def chat(request: ChatRequest, req: Request):
     MAX_FORMAT_ERROR_RETRIES = 3
     tool_text_retries = 0
     MAX_TOOL_TEXT_RETRIES = 3
-    MAX_META_TURN_RETRIES = 2
 
     # --- Approval workflow: code 12345 in wall prompt, single LLM decides (security lab: injection)
     pending = extract_pending_approval_from_messages(current_messages)
@@ -1679,23 +1679,35 @@ async def chat(request: ChatRequest, req: Request):
                         flush=True,
                     )
                     return {"role": "assistant", "content": assistant_text}
-                meta_turn_retries += 1
                 print(
-                    f"[{get_timestamp()}] [META] Spurious tool_call on native catalog turn "
-                    f"(retry {meta_turn_retries}/{MAX_META_TURN_RETRIES})",
+                    f"[{get_timestamp()}] [META] Gateway ignored tool_choice=none "
+                    f"(tool_calls: {[tc.get('name') for tc in llm_result.tool_calls]})",
                     flush=True,
                 )
-                if meta_turn_retries <= MAX_META_TURN_RETRIES:
-                    meta_system_nudge = (
-                        "CRITICAL (native catalog turn): tool_choice is none — you MUST NOT emit "
-                        "tool_calls. Answer in plain assistant message text: list each tool "
-                        "registered with the API by exact name with a brief description from its schema."
+                if not meta_catalog_fallback_done:
+                    meta_catalog_fallback_done = True
+                    fallback_llm = await summarize_meta_tools_catalog(
+                        messages_to_send,
+                        tools,
+                        api_key=api_key,
+                        provider=connection_manager.llm_provider,
+                        model_url=connection_manager.ollama_url,
+                        model_name=model_name,
+                        skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
                     )
-                    continue
-                print(
-                    f"[{get_timestamp()}] [META] Retry cap reached; returning MCP catalog summary",
-                    flush=True,
-                )
+                    fallback_parsed = llm_result_to_parsed_response(fallback_llm)
+                    fallback_text = (fallback_parsed.get("content") or "").strip()
+                    if fallback_parsed["type"] == "text" and fallback_text:
+                        print(
+                            f"[{get_timestamp()}] [META] Text-only catalog fallback succeeded",
+                            flush=True,
+                        )
+                        return {"role": "assistant", "content": fallback_text}
+                    print(
+                        f"[{get_timestamp()}] [META] Text-only fallback did not return text; "
+                        "using deterministic schema summary",
+                        flush=True,
+                    )
                 return {
                     "role": "assistant",
                     "content": format_mcp_tool_list_markdown(tools) or "No tools available.",

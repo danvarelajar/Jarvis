@@ -110,6 +110,15 @@ TEXT_ONLY_MODE_PROMPT = (
     "TEXT-ONLY MODE: No tools available. Write plain text answer only. NO JSON. NO {}. NO tool calls."
 )
 
+META_TOOLS_CATALOG_NATIVE_PROMPT = """## META TOOLS CATALOG (HIGHEST PRIORITY — overrides all tool-calling rules above):
+
+The user asked what tools are available. This is a catalog question, NOT a request to execute tools.
+
+- tool_choice is set to none — you MUST NOT emit tool_calls.
+- Respond in plain assistant message text only.
+- List each registered tool by exact name with a brief description from its schema.
+- Do NOT output JSON. Do NOT call any tool."""
+
 POST_TOOL_GENERIC_PROMPT = """POST-TOOL BEHAVIOR (active this turn):
 You have received a tool result in the conversation. You MUST STOP calling tools now.
 DO NOT output JSON. DO NOT output {}. DO NOT call any more tools.
@@ -164,15 +173,6 @@ class PromptContext:
             parts.append(NATIVE_NAIVE_MODE_PROMPT if native else NAIVE_MODE_PROMPT)
         if self.text_only_mode:
             parts.append(TEXT_ONLY_MODE_PROMPT)
-        if self.meta_tools_question:
-            parts.append(
-                "META TOOLS QUESTION (native catalog turn):\n"
-                "The user asked what tools are available. MCP tools are registered with the chat "
-                "completions API (see tool schemas for names and descriptions).\n"
-                "Respond in the assistant message as plain text only: list each registered tool by "
-                "exact name with a brief description from its schema. "
-                "tool_choice is none — do NOT emit tool_calls. Do NOT output JSON."
-            )
         if self.booking_intent:
             booking_block = _booking_intent_system_prompt(
                 self.booking_intent,
@@ -524,18 +524,30 @@ def build_system_prompt(
     ctx = prompt_context or PromptContext(naive_mode=False)
     if native_tools:
         ctx.native_tools = True
+    is_meta_catalog = bool(ctx.meta_tools_question)
     extra = ctx.render_extra_system()
     if inline_system:
         extra = f"{inline_system}\n\n{extra}" if extra else inline_system
     if extra:
         system_prompt += f"\n\n## SESSION INSTRUCTIONS\n{extra}"
-    if native_tools:
+    if native_tools and not is_meta_catalog:
         system_prompt += f"\n\n{NATIVE_TOOL_CALLING_PROMPT}"
 
     if tools:
         exact_tool_names = [tool.get("name", "unknown") for tool in tools]
         tool_names_list = "\n".join([f"  - `{name}`" for name in exact_tool_names])
-        if native_tools:
+        if is_meta_catalog and native_tools:
+            system_prompt += (
+                f"\n\n## AVAILABLE TOOLS (API-registered — schema reference for catalog only):\n"
+                f"{tool_names_list}\n"
+            )
+            system_prompt += f"\n\n{META_TOOLS_CATALOG_NATIVE_PROMPT}"
+            print(
+                f"[{get_timestamp()}] [META] Catalog system prompt appended "
+                f"(native tools={len(tools)}, tool_choice=none)",
+                flush=True,
+            )
+        elif native_tools:
             system_prompt += (
                 f"\n\n## AVAILABLE TOOLS (API-registered):\n{tool_names_list}\n\n"
                 "Use the provider tool-calling API with these exact names. "
@@ -562,7 +574,7 @@ def build_system_prompt(
                 "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
             )
         has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools)
-        if has_weather_tools:
+        if has_weather_tools and not is_meta_catalog:
             if native_tools:
                 system_prompt += (
                     "\n### WEATHER FLOW (TWO-STEP)\n"
@@ -1135,6 +1147,53 @@ async def query_llm(
             print(f"OpenAI Error: {e}")
             return LLMQueryResult(mode="text", raw_text=f"Error communicating with OpenAI: {str(e)}")
     return LLMQueryResult(mode="text", raw_text="Error: Unsupported LLM provider. Use 'openai' or 'ollama'.")
+
+
+async def summarize_meta_tools_catalog(
+    messages: list,
+    tools: list,
+    *,
+    api_key: str,
+    provider: str,
+    model_url: str,
+    model_name: str,
+    skip_ssl_verify: bool,
+) -> LLMQueryResult:
+    """
+    Text-only follow-up when a gateway ignores tool_choice=none on catalog questions.
+    Uses the same native OpenAI tool schema JSON as the tools API param, without registering tools.
+    """
+    schemas = json.dumps(jarvis_tools_to_openai_tools(tools), indent=2)
+    ctx = PromptContext(
+        text_only_mode=True,
+        naive_mode=False,
+        native_tools=False,
+        extra_sections=[
+            "META TOOLS CATALOG (text-only fallback):\n"
+            "The chat gateway ignored tool_choice=none on the prior request. "
+            "No tools are registered on this request.\n"
+            "Summarize the registered tool schemas below for the user.\n\n"
+            f"```json\n{schemas}\n```\n\n"
+            "Respond in plain text only. List each tool by exact name with a brief description "
+            "from its schema. Do NOT output JSON. Do NOT call tools."
+        ],
+    )
+    print(
+        f"[{get_timestamp()}] [META] Text-only catalog fallback "
+        f"({len(tools)} native schemas, no tools API param)",
+        flush=True,
+    )
+    return await query_llm(
+        messages,
+        tools=[],
+        api_key=api_key,
+        provider=provider,
+        model_url=model_url,
+        model_name=model_name,
+        skip_ssl_verify=skip_ssl_verify,
+        prompt_context=ctx,
+    )
+
 
 def parse_llm_response(response_content: str) -> dict:
     """
