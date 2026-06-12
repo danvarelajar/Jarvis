@@ -24,6 +24,21 @@ class ToolCall(BaseModel):
     tool: str
     arguments: Dict[str, Any]
 
+
+@dataclass
+class LLMQueryResult:
+    """Structured LLM response (native tool_calls or legacy text)."""
+    mode: str  # "native" | "text"
+    content: Optional[str] = None
+    tool_calls: List[dict] = field(default_factory=list)
+    raw_text: Optional[str] = None
+
+    @property
+    def text(self) -> str:
+        if self.mode == "text":
+            return self.raw_text or self.content or ""
+        return self.content or ""
+
 SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
 YOUR GOAL: Execute the user's intent as EFFICIENTLY as possible.
 
@@ -279,12 +294,106 @@ def _split_inline_system_messages(messages: list) -> tuple[list, str]:
     return chat_messages, "\n\n".join(inline_system)
 
 
+def jarvis_tools_to_openai_tools(tools: List[dict]) -> List[dict]:
+    """Map MCP/Jarvis tool definitions to OpenAI Chat Completions tools format."""
+    openai_tools: List[dict] = []
+    for tool in tools:
+        name = tool.get("name", "")
+        if not name:
+            continue
+        schema = tool.get("inputSchema") or {"type": "object", "properties": {}}
+        openai_tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": tool.get("description") or "",
+                    "parameters": schema,
+                },
+            }
+        )
+    return openai_tools
+
+
+def format_messages_for_chat_api(messages: list) -> List[dict]:
+    """Build OpenAI-compatible messages including tool / tool_calls roles."""
+    formatted: List[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "model":
+            role = "assistant"
+        if role == "tool":
+            formatted.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "content": msg.get("content") or "",
+                }
+            )
+            continue
+        if role == "assistant" and msg.get("tool_calls"):
+            entry: Dict[str, Any] = {"role": "assistant", "content": msg.get("content")}
+            if entry["content"] is None:
+                entry["content"] = None
+            entry["tool_calls"] = msg["tool_calls"]
+            formatted.append(entry)
+            continue
+        formatted.append({"role": role, "content": msg.get("content") or ""})
+    return formatted
+
+
+def mcp_result_to_tool_content(result) -> str:
+    """Serialize MCP CallToolResult for OpenAI role=tool message content."""
+    if hasattr(result, "model_dump"):
+        try:
+            return json.dumps(result.model_dump(), separators=(",", ":"), default=str)
+        except Exception:
+            pass
+    if hasattr(result, "content"):
+        parts: List[str] = []
+        for item in result.content:
+            if item.type == "text":
+                parts.append(item.text)
+            elif item.type == "image":
+                parts.append("[Image Content]")
+        return "\n".join(parts) if parts else ""
+    try:
+        return json.dumps(result, separators=(",", ":"), default=str)
+    except Exception:
+        return str(result)
+
+
+def llm_result_to_parsed_response(llm_result: LLMQueryResult) -> dict:
+    """Convert LLMQueryResult to legacy parse_llm_response dict shape for main.py."""
+    if llm_result.tool_calls:
+        tc = llm_result.tool_calls[0]
+        return {
+            "type": "tool_call",
+            "data": ToolCall(tool=tc["name"], arguments=tc["arguments"]),
+            "tool_call_id": tc["id"],
+            "native_tools": True,
+            "assistant_content": llm_result.content,
+        }
+    text = llm_result.content or llm_result.raw_text or ""
+    if llm_result.mode == "text":
+        parsed = parse_llm_response(text)
+        parsed["native_tools"] = False
+        return parsed
+    if text.strip():
+        parsed = parse_llm_response(text)
+        if parsed.get("type") == "tool_call":
+            parsed["native_tools"] = False
+            return parsed
+    return {"type": "text", "content": text, "native_tools": True}
+
+
 def build_system_prompt(
     *,
     tools: Optional[List[dict]] = None,
     user_query: str = "",
     prompt_context: Optional[PromptContext] = None,
     inline_system: str = "",
+    native_tools: bool = False,
 ) -> str:
     current_date, current_datetime = get_current_date()
     try:
@@ -330,30 +439,50 @@ def build_system_prompt(
     if tools:
         exact_tool_names = [tool.get("name", "unknown") for tool in tools]
         tool_names_list = "\n".join([f"  - `{name}`" for name in exact_tool_names])
-        system_prompt += f"\n\n## AVAILABLE TOOLS:\n\n**CRITICAL: EXACT TOOL NAMES (use EXACTLY as shown):**\n{tool_names_list}\n\n"
-        system_prompt += "**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
-        system_prompt += "**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location'.**\n\n"
-        tool_descriptions = json.dumps(tools, indent=2)
-        system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\n"
-        system_prompt += "You MUST use these tools to answer queries. Use the EXACT tool names listed above."
-        system_prompt += (
-            "\n### GLOBAL TOOL RULES (MANDATORY)\n"
-            "1. ONLY use tools if the user used the @server_name prefix (e.g., @weather, @booking).\n"
-            "2. Use EXACT tool names and parameter names from the documentation. NO synonyms. NO extra parameters.\n"
-            "3. JSON format for tool calls: {\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}.\n"
-            "4. If no tools are available or the user did NOT use @server_name, respond with TEXT only (no JSON).\n"
-            "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
-        )
+        if native_tools:
+            system_prompt += (
+                f"\n\n## AVAILABLE TOOLS (API-registered):\n{tool_names_list}\n\n"
+                "Use the provider tool-calling API with these exact names. "
+                "Do NOT invent or modify tool names.\n"
+                "### GLOBAL TOOL RULES (MANDATORY)\n"
+                "1. ONLY use tools if the user used the @server_name prefix (e.g., @weather, @booking).\n"
+                "2. Use EXACT tool names and parameter names from the tool schemas. NO synonyms. NO extra parameters.\n"
+                "3. If no tools apply, respond with plain text only.\n"
+                "4. Do NOT add parameters that are not listed.\n"
+            )
+        else:
+            system_prompt += f"\n\n## AVAILABLE TOOLS:\n\n**CRITICAL: EXACT TOOL NAMES (use EXACTLY as shown):**\n{tool_names_list}\n\n"
+            system_prompt += "**YOU MUST use ONLY these exact tool names. Do NOT invent, modify, or hallucinate tool names.**\n"
+            system_prompt += "**Example: If you see 'weather__search_location', use EXACTLY 'weather__search_location', NOT 'weather__get_location'.**\n\n"
+            tool_descriptions = json.dumps(tools, indent=2)
+            system_prompt += f"**Full Tool Definitions (JSON Format):**\n```json\n{tool_descriptions}\n```\n\n"
+            system_prompt += "You MUST use these tools to answer queries. Use the EXACT tool names listed above."
+            system_prompt += (
+                "\n### GLOBAL TOOL RULES (MANDATORY)\n"
+                "1. ONLY use tools if the user used the @server_name prefix (e.g., @weather, @booking).\n"
+                "2. Use EXACT tool names and parameter names from the documentation. NO synonyms. NO extra parameters.\n"
+                "3. JSON format for tool calls: {\"tool\": \"exact_tool_name\", \"arguments\": {\"param\": \"value\"}}.\n"
+                "4. If no tools are available or the user did NOT use @server_name, respond with TEXT only (no JSON).\n"
+                "5. Do NOT add parameters that are not listed. Example forbidden extras: adults, guests, people, persons.\n"
+            )
         has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools)
         if has_weather_tools:
-            system_prompt += (
-                "\n### WEATHER FLOW (TWO-STEP)\n"
-                "Step 1: Call weather__search_location with the city/location name from the user.\n"
-                "  Example: {\"tool\": \"weather__search_location\", \"arguments\": {\"city\": \"Madrid\"}}\n"
-                "Step 2: After you get coordinates, call weather__get_complete_forecast with EXACT latitude and longitude from step 1.\n"
-                "  Example: {\"tool\": \"weather__get_complete_forecast\", \"arguments\": {\"latitude\": 40.4168, \"longitude\": -3.7038}}\n"
-                "Rules: Do NOT hallucinate coordinates. Do NOT pass 'location' to weather__get_complete_forecast.\n"
-            )
+            if native_tools:
+                system_prompt += (
+                    "\n### WEATHER FLOW (TWO-STEP)\n"
+                    "Step 1: Call weather__search_location with the city/location from the user.\n"
+                    "Step 2: Call weather__get_complete_forecast with latitude/longitude from step 1.\n"
+                    "Rules: Do NOT hallucinate coordinates.\n"
+                )
+            else:
+                system_prompt += (
+                    "\n### WEATHER FLOW (TWO-STEP)\n"
+                    "Step 1: Call weather__search_location with the city/location name from the user.\n"
+                    "  Example: {\"tool\": \"weather__search_location\", \"arguments\": {\"city\": \"Madrid\"}}\n"
+                    "Step 2: After you get coordinates, call weather__get_complete_forecast with EXACT latitude and longitude from step 1.\n"
+                    "  Example: {\"tool\": \"weather__get_complete_forecast\", \"arguments\": {\"latitude\": 40.4168, \"longitude\": -3.7038}}\n"
+                    "Rules: Do NOT hallucinate coordinates. Do NOT pass 'location' to weather__get_complete_forecast.\n"
+                )
     else:
         system_prompt += "\n\n## AVAILABLE TOOLS:\nNo tools are available. Respond with plain text only. Do NOT output JSON. Do NOT try to call or invent tools."
 
@@ -676,92 +805,117 @@ def _normalize_ollama_base_url(url: str) -> str:
     return base.rstrip("/")
 
 
-async def query_ollama(messages: list, system_prompt: str, model_url: str, model_name: str = "", skip_ssl_verify: bool = False) -> str:  # noqa: E501
-    """
-    Queries a local Ollama instance via the OpenAI-compatible /v1/chat/completions API.
-    
-    Args:
-        messages: List of message dicts
-        system_prompt: System prompt to use
-        model_url: Ollama server URL
-        model_name: Model name to use
-        skip_ssl_verify: If True, disable TLS certificate verification (for self-signed/internal certs)
-    """
-    if not model_url:
-        return "Error: Ollama URL is not set."
-    
-    if not model_name or model_name.strip() == "":
-        return "Error: Model name is not set. Please select a model in the settings."
+def _parse_chat_message(message) -> LLMQueryResult:
+    tool_calls: List[dict] = []
+    if getattr(message, "tool_calls", None):
+        for tc in message.tool_calls:
+            args_raw = tc.function.arguments or "{}"
+            try:
+                arguments = json.loads(args_raw)
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append(
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": arguments,
+                }
+            )
+    content = message.content
+    if tool_calls:
+        print(
+            f"[{get_timestamp()}] [LLM] Native tool_calls: "
+            f"{[t['name'] for t in tool_calls]}",
+            flush=True,
+        )
+    elif content:
+        print(f"[{get_timestamp()}] [LLM] Response content length: {len(content)} chars")
+    else:
+        print(f"[{get_timestamp()}] [LLM] WARNING: Response content is empty!")
+    return LLMQueryResult(mode="native", content=content, tool_calls=tool_calls)
 
-    ollama_messages = [{"role": "system", "content": system_prompt}]
-    for msg in messages:
-        role = msg.get("role")
-        if role == "model":
-            role = "assistant"
-        ollama_messages.append({"role": role, "content": msg.get("content", "")})
 
-    total_chars = sum(len(str(msg.get("content", ""))) for msg in ollama_messages)
-    print(f"[{get_timestamp()}] DEBUG: Using Ollama model: {model_name}")
+async def _query_chat_completions(
+    *,
+    messages: list,
+    system_prompt: str,
+    model_name: str,
+    api_key: str,
+    base_url: Optional[str],
+    tools: Optional[List[dict]],
+    native_tools: bool,
+    skip_ssl_verify: bool,
+    provider_label: str,
+) -> LLMQueryResult:
+    """OpenAI Chat Completions API (OpenAI or Ollama-compatible base URL)."""
+    from openai import AsyncOpenAI
+
+    chat_messages = [{"role": "system", "content": system_prompt}]
+    chat_messages.extend(format_messages_for_chat_api(messages))
+
+    total_chars = sum(len(str(msg.get("content") or "")) for msg in chat_messages)
+    print(f"[{get_timestamp()}] DEBUG: Using {provider_label} model: {model_name}")
     print(f"[{get_timestamp()}] [LLM] Using OpenAI-compatible /v1/chat/completions API")
+    if native_tools and tools:
+        print(f"[{get_timestamp()}] [LLM] Native tools: {len(tools)} registered with API", flush=True)
     print(f"[{get_timestamp()}] [LLM] Total prompt/message chars: {total_chars}")
 
-    base_url = _normalize_ollama_base_url(model_url)
-    openai_base = f"{base_url}/v1"
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    http_client = httpx.AsyncClient(verify=not skip_ssl_verify, timeout=timeout)
+    client_kwargs: Dict[str, Any] = {"api_key": api_key, "http_client": http_client}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = AsyncOpenAI(**client_kwargs)
 
-    try:
-        from openai import AsyncOpenAI
+    request_kwargs: Dict[str, Any] = {
+        "model": model_name,
+        "messages": chat_messages,
+        "temperature": 0,
+        "timeout": 600.0,
+    }
+    if native_tools and tools:
+        request_kwargs["tools"] = jarvis_tools_to_openai_tools(tools)
+        request_kwargs["tool_choice"] = "auto"
 
-        request_start = time.time()
-        print(f"[{get_timestamp()}] [LLM] Sending request to Ollama via OpenAI spec (base: {openai_base})...")
-        print(f"[{get_timestamp()}] [LLM] Waiting for Ollama inference (this may take 2-3 minutes if model needs to load)...")
+    request_start = time.time()
+    endpoint = base_url or "https://api.openai.com/v1"
+    print(f"[{get_timestamp()}] [LLM] Sending request via OpenAI spec (base: {endpoint})...")
+    print(f"[{get_timestamp()}] [LLM] Waiting for inference (this may take 2-3 minutes if model needs to load)...")
 
-        # Use 10 min timeout for inference (model load + generation can be slow)
-        ollama_timeout = httpx.Timeout(600.0, connect=10.0)
-        http_client = httpx.AsyncClient(verify=not skip_ssl_verify, timeout=ollama_timeout)
-        client = AsyncOpenAI(
-            base_url=openai_base,
-            api_key="ollama",  # required by client but ignored by Ollama
-            http_client=http_client,
-        )
-
-        # Retry logic for 404 (model loading)
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                response = await client.chat.completions.create(
-                    model=model_name,
-                    messages=ollama_messages,
-                    temperature=0,
-                    timeout=600.0,
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            response = await client.chat.completions.create(**request_kwargs)
+            http_time = time.time() - request_start
+            if http_time > 60:
+                print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s")
+            elif http_time > 30:
+                print(f"[{get_timestamp()}] [LLM] ⚠️  MODERATE: Inference took {http_time:.1f}s")
+            else:
+                print(f"[{get_timestamp()}] [LLM] ✓ Inference completed in {http_time:.1f}s")
+            print(f"[{get_timestamp()}] [LLM] Response received (total: {format_duration(request_start)})")
+            return _parse_chat_message(response.choices[0].message)
+        except Exception as e:
+            err_str = str(e).lower()
+            if ("404" in err_str or "not found" in err_str) and attempt < max_retries - 1:
+                print(
+                    f"[{get_timestamp()}] [LLM] ⚠️  Got 404, retrying in 5 seconds "
+                    f"(attempt {attempt + 1}/{max_retries})...",
+                    flush=True,
                 )
-                http_time = time.time() - request_start
-                if http_time > 60:
-                    print(f"[{get_timestamp()}] [LLM] ⚠️  SLOW: Inference took {http_time:.1f}s")
-                elif http_time > 30:
-                    print(f"[{get_timestamp()}] [LLM] ⚠️  MODERATE: Inference took {http_time:.1f}s")
-                else:
-                    print(f"[{get_timestamp()}] [LLM] ✓ Inference completed in {http_time:.1f}s")
-                print(f"[{get_timestamp()}] [LLM] Ollama response received (total: {format_duration(request_start)})")
-                content = response.choices[0].message.content
-                if content:
-                    print(f"[{get_timestamp()}] [LLM] Response content length: {len(content)} chars")
-                else:
-                    print(f"[{get_timestamp()}] [LLM] WARNING: Response content is empty!")
-                return content or ""
-            except Exception as e:
-                err_str = str(e).lower()
-                if ("404" in err_str or "not found" in err_str) and attempt < max_retries - 1:
-                    print(f"[{get_timestamp()}] [LLM] ⚠️  Got 404, retrying in 5 seconds (attempt {attempt + 1}/{max_retries})...")
-                    await asyncio.sleep(5)
-                    continue
-                raise
-    except Exception as e:
-        err_msg = str(e)
-        if "401" in err_msg or "403" in err_msg:
-            # OpenAI client may surface auth errors; Ollama ignores api_key
-            pass
-        print(f"Ollama Error: {err_msg}")
-        return f"Error communicating with Ollama at {model_url}: {err_msg}"
+                await asyncio.sleep(5)
+                continue
+            if native_tools and tools and "tool" in err_str:
+                print(
+                    f"[{get_timestamp()}] [LLM] Native tools rejected by API, falling back to text tool loop: {e}",
+                    flush=True,
+                )
+                request_kwargs.pop("tools", None)
+                request_kwargs.pop("tool_choice", None)
+                native_tools = False
+                continue
+            raise
+    return LLMQueryResult(mode="text", raw_text=f"Error communicating with {provider_label}")
 
 import time
 
@@ -789,77 +943,91 @@ async def query_llm(
     user_query: str = "",
     skip_ssl_verify: bool = False,
     prompt_context: Optional[PromptContext] = None,
-) -> str:
+) -> LLMQueryResult:
     """
     Queries the selected LLM provider.
 
-    Args:
-        messages: List of message dicts with 'role' and 'content'
-        tools: List of tool definitions
-        prompt_context: Per-turn instructions merged into system prompt (booking routing, post-tool, etc.)
+    When tools are provided, uses native OpenAI tool-calling (tools + tool/tool_calls roles).
+    When no tools, returns plain text (legacy text mode).
     """
     chat_messages, inline_system = _split_inline_system_messages(messages)
     query_for_dates = user_query or _user_query_from_messages(chat_messages)
+    use_native = bool(tools)
     system_prompt = build_system_prompt(
         tools=tools,
         user_query=query_for_dates,
         prompt_context=prompt_context,
         inline_system=inline_system,
+        native_tools=use_native,
     )
 
     if provider == "ollama":
-        return await query_ollama(
-            chat_messages, system_prompt, model_url, model_name=model_name, skip_ssl_verify=skip_ssl_verify
-        )
+        if not model_url:
+            return LLMQueryResult(mode="text", raw_text="Error: Ollama URL is not set.")
+        if not model_name or not model_name.strip():
+            return LLMQueryResult(mode="text", raw_text="Error: Model name is not set. Please select a model in the settings.")
+        base = f"{_normalize_ollama_base_url(model_url)}/v1"
+        try:
+            if use_native:
+                return await _query_chat_completions(
+                    messages=chat_messages,
+                    system_prompt=system_prompt,
+                    model_name=model_name,
+                    api_key="ollama",
+                    base_url=base,
+                    tools=tools,
+                    native_tools=True,
+                    skip_ssl_verify=skip_ssl_verify,
+                    provider_label="Ollama",
+                )
+            result = await _query_chat_completions(
+                messages=chat_messages,
+                system_prompt=system_prompt,
+                model_name=model_name,
+                api_key="ollama",
+                base_url=base,
+                tools=None,
+                native_tools=False,
+                skip_ssl_verify=skip_ssl_verify,
+                provider_label="Ollama",
+            )
+            return LLMQueryResult(mode="text", raw_text=result.content or "")
+        except Exception as e:
+            print(f"Ollama Error: {e}")
+            return LLMQueryResult(mode="text", raw_text=f"Error communicating with Ollama at {model_url}: {e}")
 
     if provider == "openai":
-        from openai import AsyncOpenAI
         if not api_key:
-            return "Error: OPENAI_API_KEY is not set. Please provide it in the UI."
-        
-        client = AsyncOpenAI(api_key=api_key)
-        
-        openai_messages = [{"role": "system", "content": system_prompt}]
-        for msg in chat_messages:
-            role = msg["role"]
-            if role == "model":
-                role = "assistant"
-            openai_messages.append({"role": role, "content": msg["content"]})
-
+            return LLMQueryResult(mode="text", raw_text="Error: OPENAI_API_KEY is not set. Please provide it in the UI.")
         try:
-            print("Sending request to OpenAI (GPT-4o Mini)...")
-            # Log request details
-            print(f"[{get_timestamp()}] [DEBUG] OpenAI Request - Messages count: {len(openai_messages)}")
-            if openai_messages:
-                system_msg = next((m for m in openai_messages if m.get("role") == "system"), None)
-                if system_msg:
-                    sys_content = system_msg.get("content", "")
-                    print(f"[{get_timestamp()}] [DEBUG] System prompt length: {len(sys_content)} chars")
-                    if "Available Tools" in sys_content:
-                        # Extract tool count from system prompt
-                        import re
-                        tool_matches = re.findall(r'"name":\s*"([^"]+)"', sys_content)
-                        if tool_matches:
-                            print(f"[{get_timestamp()}] [DEBUG] Tools in system prompt: {len(tool_matches)} tools")
-                            print(f"[{get_timestamp()}] [DEBUG] Tool names: {', '.join(tool_matches[:5])}{'...' if len(tool_matches) > 5 else ''}")
-                # Log last user message preview
-                user_msgs = [m for m in openai_messages if m.get("role") == "user"]
-                if user_msgs:
-                    last_user = user_msgs[-1].get("content", "")[:200]
-                    print(f"[{get_timestamp()}] [DEBUG] Last user message preview: {last_user}...")
-            print(f"[{get_timestamp()}] [DEBUG] OpenAI Request - Model: gpt-4o-mini, Temperature: 0")
-            openai_start = time.time()
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=openai_messages,
-                temperature=0
+            if use_native:
+                return await _query_chat_completions(
+                    messages=chat_messages,
+                    system_prompt=system_prompt,
+                    model_name=model_name or "gpt-4o-mini",
+                    api_key=api_key,
+                    base_url=None,
+                    tools=tools,
+                    native_tools=True,
+                    skip_ssl_verify=skip_ssl_verify,
+                    provider_label="OpenAI",
+                )
+            result = await _query_chat_completions(
+                messages=chat_messages,
+                system_prompt=system_prompt,
+                model_name=model_name or "gpt-4o-mini",
+                api_key=api_key,
+                base_url=None,
+                tools=None,
+                native_tools=False,
+                skip_ssl_verify=skip_ssl_verify,
+                provider_label="OpenAI",
             )
-            print(f"[{get_timestamp()}] [LLM] OpenAI response received ({format_duration(openai_start)})")
-            return response.choices[0].message.content
+            return LLMQueryResult(mode="text", raw_text=result.content or "")
         except Exception as e:
             print(f"OpenAI Error: {e}")
-            return f"Error communicating with OpenAI: {str(e)}"
-    return "Error: Unsupported LLM provider. Use 'openai' or 'ollama'."
+            return LLMQueryResult(mode="text", raw_text=f"Error communicating with OpenAI: {str(e)}")
+    return LLMQueryResult(mode="text", raw_text="Error: Unsupported LLM provider. Use 'openai' or 'ollama'.")
 
 def parse_llm_response(response_content: str) -> dict:
     """

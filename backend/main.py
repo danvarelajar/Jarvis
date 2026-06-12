@@ -35,6 +35,8 @@ from .mcp_client import (
 from .llm_service import (
     query_llm,
     parse_llm_response,
+    llm_result_to_parsed_response,
+    mcp_result_to_tool_content,
     _normalize_ollama_base_url,
     PromptContext,
     BOOKING_REFUND_SYSTEM_API_KEY,
@@ -43,7 +45,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-refund-pure-lab"
+AGENT_BUILD_ID = "8.0.1-native-tools"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -116,6 +118,51 @@ def sanitize_messages_for_tool_use(messages: list) -> list:
             continue
         cleaned.append(msg)
     return cleaned
+
+
+def legacy_assistant_text_from_llm(llm_result, parsed_response: dict) -> str:
+    if llm_result.mode == "text":
+        return llm_result.raw_text or llm_result.text or ""
+    if parsed_response.get("type") == "tool_call":
+        tc = parsed_response["data"]
+        return json.dumps({"tool": tc.tool, "arguments": tc.arguments})
+    return llm_result.content or ""
+
+
+def append_tool_exchange_to_history(
+    messages: list,
+    *,
+    native_tools: bool,
+    tool_call_id: str,
+    assistant_content: Optional[str],
+    tool_name: str,
+    tool_arguments: dict,
+    tool_content: str,
+    legacy_assistant_text: str,
+) -> None:
+    """Record assistant tool call + tool result (native OpenAI roles or legacy text loop)."""
+    if native_tools and tool_call_id:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_content,
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(tool_arguments),
+                        },
+                    }
+                ],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": tool_content})
+        print(f"[{get_timestamp()}] [TOOL] Fed native tool result to LLM (tool_call_id={tool_call_id})", flush=True)
+    else:
+        messages.append({"role": "assistant", "content": legacy_assistant_text})
+        messages.append({"role": "user", "content": f"Tool Result: {tool_content}"})
 
 
 def refund_result_requests_api_key_append(tool_output: str) -> bool:
@@ -283,7 +330,7 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
                 stopReason="error"
             )
     print(f"[{get_timestamp()}] [MCP_SAMPLING] Using Ollama model: {model_name}")
-    response_text = await query_llm(
+    sampling_result = await query_llm(
         messages,
         api_key=api_key,
         provider=provider,
@@ -292,6 +339,7 @@ async def handle_sampling_message(params: types.CreateMessageRequestParams) -> t
         skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
         prompt_context=sampling_context,
     )
+    response_text = sampling_result.text
     
     # Construct result
     return types.CreateMessageResult(
@@ -864,7 +912,7 @@ async def chat(request: ChatRequest, req: Request):
         if not approval_tools:
             approval_tools = await connection_manager.list_tools(pending.get("server", "booking"))
             approval_tools = [t for t in approval_tools if t.get("name") == pending["tool"]]
-        response_content = await query_llm(
+        approval_llm_result = await query_llm(
             approval_messages,
             tools=approval_tools or tools,
             api_key=api_key,
@@ -874,7 +922,7 @@ async def chat(request: ChatRequest, req: Request):
             skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
             prompt_context=approval_context,
         )
-        parsed = parse_llm_response(response_content or "")
+        parsed = llm_result_to_parsed_response(approval_llm_result)
         tool_data = parsed.get("data") if parsed.get("type") == "tool_call" else None
         approved = (
             tool_data is not None
@@ -900,7 +948,7 @@ async def chat(request: ChatRequest, req: Request):
                     except Exception:
                         tool_output = str(result)
                 current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
-                format_response = await query_llm(
+                format_result = await query_llm(
                     current_messages,
                     tools=[],
                     api_key=api_key,
@@ -910,7 +958,7 @@ async def chat(request: ChatRequest, req: Request):
                     skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
                     prompt_context=PromptContext(naive_mode=True, post_tool_mode="approval"),
                 )
-                return {"role": "assistant", "content": format_response}
+                return {"role": "assistant", "content": format_result.text}
             except Exception as e:
                 print(f"[{get_timestamp()}] [APPROVAL] Tool execution failed: {e}", flush=True)
                 return {"role": "assistant", "content": f"Error executing approved action: {str(e)}"}
@@ -1384,7 +1432,7 @@ async def chat(request: ChatRequest, req: Request):
             current_messages.append({"role": "user", "content": active_correction})
         messages_to_send = current_messages.copy()
 
-        response_content = await query_llm(
+        llm_result = await query_llm(
             messages_to_send,
             tools_to_send,
             api_key=api_key,
@@ -1398,7 +1446,10 @@ async def chat(request: ChatRequest, req: Request):
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
 
         parse_start = time.time()
-        parsed_response = parse_llm_response(response_content)
+        parsed_response = llm_result_to_parsed_response(llm_result)
+        response_content = legacy_assistant_text_from_llm(llm_result, parsed_response)
+        if llm_result.mode == "text" and response_content:
+            print(f"[{get_timestamp()}] DEBUG: Raw LLM Response: {repr(response_content)}")
         print(f"[{get_timestamp()}] [DEBUG] Response parsed ({format_duration(parse_start)})")
         
         if parsed_response["type"] == "text":
@@ -1641,6 +1692,9 @@ async def chat(request: ChatRequest, req: Request):
                 tool_result_text = ""
                 for msg in reversed(current_messages):
                     content = msg.get("content", "")
+                    if msg.get("role") == "tool" and content:
+                        tool_result_text = content
+                        break
                     if msg.get("role") == "user" and ("Tool Result:" in content or "UNTRUSTED_TOOL_RESULT_BEGIN" in content):
                         # Extract tool result content
                         if "Tool Result:" in content:
@@ -2090,9 +2144,23 @@ async def chat(request: ChatRequest, req: Request):
                 print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Tool Result Length: {len(tool_output)} chars")
                 if len(tool_output) < 200:
                     print(f"[{get_timestamp()}] [Turn {turn_index + 1}] Result Preview: {tool_output}")
-                
-                current_messages.append({"role": "assistant", "content": response_content})
-                
+
+                native_tool_call_id = parsed_response.get("tool_call_id", "") or ""
+                use_native_tool_messages = bool(parsed_response.get("native_tools")) and bool(native_tool_call_id)
+                tool_content_for_llm = (
+                    mcp_result_to_tool_content(result) if use_native_tool_messages else tool_output
+                )
+                append_tool_exchange_to_history(
+                    current_messages,
+                    native_tools=use_native_tool_messages,
+                    tool_call_id=native_tool_call_id,
+                    assistant_content=parsed_response.get("assistant_content"),
+                    tool_name=canonical_tool_name,
+                    tool_arguments=tool_call.arguments,
+                    tool_content=tool_content_for_llm,
+                    legacy_assistant_text=response_content,
+                )
+
                 # Weather flow: Customize message based on step
                 # Check if we just completed step 1 (search_location) and now need step 2 (forecast)
                 # The state should have been updated to "need_forecast" above if coordinates were extracted
@@ -2148,11 +2216,11 @@ async def chat(request: ChatRequest, req: Request):
                                     "Extract latitude and longitude from the tool result above, "
                                     "then call weather__get_complete_forecast. Output ONLY the JSON tool call."
                                 )
-                        current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
+                        pass
                     else:
-                        current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
+                        pass
                 elif canonical_tool_name == "weather__get_complete_forecast":
-                    current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
+                    pass
                     post_tool_mode = "weather_forecast"
                     tools = []
                     tools_to_send = []
@@ -2166,7 +2234,6 @@ async def chat(request: ChatRequest, req: Request):
                     refund_flow_state = "need_api_key_append"
                     if not booking_refund_desc:
                         booking_refund_desc = booking_refund_description_from_tools(tools)
-                    current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
                     print(
                         f"[{get_timestamp()}] [BOOKING] MCP injection pattern detected after refund_booking "
                         f"(bookingId={refund_original_booking_id!r})",
@@ -2177,7 +2244,6 @@ async def chat(request: ChatRequest, req: Request):
                     and refund_flow_state == "need_api_key_append"
                 ):
                     step2_booking_id = str(tool_call.arguments.get("bookingId", ""))
-                    current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
                     refund_flow_state = None
                     refund_original_booking_id = ""
                     booking_routing_intent = None
@@ -2188,7 +2254,6 @@ async def chat(request: ChatRequest, req: Request):
                         flush=True,
                     )
                 else:
-                    current_messages.append({"role": "user", "content": f"Tool Result: {tool_output}"})
                     post_tool_mode = "generic"
                 
                 # CRITICAL: Remove tools after successful tool execution
