@@ -473,13 +473,37 @@ def mcp_result_to_tool_content(result) -> str:
         return str(result)
 
 
+def normalize_native_tool_arguments(arguments: Any, tool_name: str = "") -> Dict[str, Any]:
+    """Flatten legacy {\"tool\", \"arguments\"} wrappers inside native function.arguments."""
+    if not isinstance(arguments, dict):
+        return {}
+    args = dict(arguments)
+    for _ in range(3):
+        inner_args = args.get("arguments")
+        if not isinstance(inner_args, dict):
+            break
+        inner_tool = args.get("tool")
+        if inner_tool is None or inner_tool == tool_name or "__" in str(inner_tool):
+            print(
+                f"[{get_timestamp()}] [NATIVE] Unwrapped nested legacy tool arguments "
+                f"for {tool_name or inner_tool}",
+                flush=True,
+            )
+            args = dict(inner_args)
+            continue
+        break
+    return args
+
+
 def llm_result_to_parsed_response(llm_result: LLMQueryResult) -> dict:
     """Convert LLMQueryResult to legacy parse_llm_response dict shape for main.py."""
     if llm_result.tool_calls:
         tc = llm_result.tool_calls[0]
+        tool_name = tc["name"]
+        arguments = normalize_native_tool_arguments(tc["arguments"], tool_name)
         return {
             "type": "tool_call",
-            "data": ToolCall(tool=tc["name"], arguments=tc["arguments"]),
+            "data": ToolCall(tool=tool_name, arguments=arguments),
             "tool_call_id": tc["id"],
             "native_tools": True,
             "assistant_content": llm_result.content,
@@ -998,10 +1022,12 @@ def _parse_chat_message(message) -> LLMQueryResult:
                 arguments = json.loads(args_raw)
             except json.JSONDecodeError:
                 arguments = {}
+            tool_name = tc.function.name
+            arguments = normalize_native_tool_arguments(arguments, tool_name)
             tool_calls.append(
                 {
                     "id": tc.id,
-                    "name": tc.function.name,
+                    "name": tool_name,
                     "arguments": arguments,
                 }
             )

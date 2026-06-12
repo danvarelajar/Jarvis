@@ -47,7 +47,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-meta-catalog-direct"
+AGENT_BUILD_ID = "8.0.1-native-unwrap"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -192,10 +192,31 @@ def format_mcp_tool_list_markdown(tools: List[Dict[str, Any]]) -> str:
 
 
 def is_tools_meta_question(user_message: str) -> bool:
+    """True when the user asks for a tool catalog, not a normal @server action."""
     msg_low = (user_message or "").lower()
-    return ("tool" in msg_low or "tools" in msg_low) and any(
-        k in msg_low for k in ["available", "list", "what", "which", "show", "can you use"]
+    catalog_phrases = (
+        "what tools are available",
+        "what tools are there",
+        "what tools do you have",
+        "what tools can you",
+        "which tools are available",
+        "which tools do you have",
+        "list tools",
+        "list available tools",
+        "list the tools",
+        "show tools",
+        "show available tools",
+        "show me the tools",
+        "tools available",
+        "available tools",
+        "what tool is available",
+        "what tools you have",
     )
+    if any(phrase in msg_low for phrase in catalog_phrases):
+        return True
+    if "tools" in msg_low and any(k in msg_low for k in ("available", "list", "show")):
+        return True
+    return False
 
 
 async def resolve_chat_model_name() -> str:
@@ -889,7 +910,7 @@ async def chat(request: ChatRequest, req: Request):
     
     # Initialize weather flow state if weather tools are available and user is asking about weather
     has_weather_tools = any("weather__" in (t.get("name") or "") for t in tools)
-    if has_weather_tools and user_message:
+    if has_weather_tools and user_message and not is_tools_meta_question(user_message):
         user_lower = user_message.lower()
         if any(keyword in user_lower for keyword in ["weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy"]):
             weather_flow_state = "need_search"
