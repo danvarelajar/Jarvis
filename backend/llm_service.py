@@ -168,7 +168,7 @@ class PromptContext:
             parts.append(
                 "META TOOLS QUESTION:\n"
                 f"The user asked what tools are available. Here are the tools for this server:\n{self.meta_tools_list}\n\n"
-                "Respond with plain TEXT only. List these tools in a friendly way. Do NOT call any tool. Do NOT output JSON."
+                "Respond with plain TEXT only. List every tool above by exact name. Do NOT call any tool. Do NOT output JSON."
             )
         if self.booking_intent:
             booking_block = _booking_intent_system_prompt(

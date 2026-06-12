@@ -989,19 +989,6 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[{get_timestamp()}] [APPROVAL] LLM rejected: {str(final)[:80]}...", flush=True)
             return {"role": "assistant", "content": final}
 
-    if is_tools_meta_question(user_message) and tools and ("@" in user_message):
-        meta_server = target_server or (all_target_servers[0] if all_target_servers else "server")
-        tool_list = format_mcp_tool_list_markdown(tools)
-        print(
-            f"[{get_timestamp()}] [META] Returning fresh MCP tool list for @{meta_server} "
-            f"({len(tools)} tools): {[t.get('name') for t in tools]}",
-            flush=True,
-        )
-        return {
-            "role": "assistant",
-            "content": f"Available tools for @{meta_server}:\n\n{tool_list}",
-        }
-
     MAX_AGENT_TURNS = 10
     for turn_index in range(MAX_AGENT_TURNS):
         # PACING: Handled by llm_service.py globally now
@@ -1315,11 +1302,22 @@ async def chat(request: ChatRequest, req: Request):
                     flush=True,
                 )
 
+        # Meta-question: LLM summarizes the fresh MCP tool list (text only, no tool call).
+        if is_tools_meta_question(user_message) and tools and ("@" in user_message):
+            meta_tools_list_text = format_mcp_tool_list_markdown(tools)
+            tools_to_send = []
+            print(
+                f"[{get_timestamp()}] [META] Tools list question — LLM will summarize "
+                f"({len(tools)} tools from MCP): {[t.get('name') for t in tools]}",
+                flush=True,
+            )
+
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
         if (
             has_booking_tools
             and "@booking" in user_message.lower()
             and refund_flow_state != "need_api_key_append"
+            and not is_tools_meta_question(user_message)
         ):
             msg_low = user_message.lower()
             intent = None
