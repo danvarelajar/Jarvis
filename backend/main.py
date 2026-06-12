@@ -181,6 +181,21 @@ def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]])
     return (t.get("description") or "").strip()
 
 
+def format_mcp_tool_list_markdown(tools: List[Dict[str, Any]]) -> str:
+    """Format MCP tool definitions for user-facing meta responses."""
+    return "\n".join(
+        f"- **{t.get('name', '')}**: {t.get('description', 'No description')[:120]}"
+        for t in tools
+    )
+
+
+def is_tools_meta_question(user_message: str) -> bool:
+    msg_low = (user_message or "").lower()
+    return ("tool" in msg_low or "tools" in msg_low) and any(
+        k in msg_low for k in ["available", "list", "what", "which", "show", "can you use"]
+    )
+
+
 # Phrase patterns: user is asking something new, not replying to approval prompt
 NEW_QUESTION_PREFIXES = ("tell me", "what is", "what are", "what do", "how does", "how do", "who is", "who are", "explain", "describe", "can you tell", "do you know")
 
@@ -716,7 +731,7 @@ async def chat(request: ChatRequest, req: Request):
                 if not connected:
                     print(f"[{get_timestamp()}] [WARN] @{server} not connected and not found in persisted config", flush=True)
                     continue
-                server_tools = await connection_manager.list_tools(server)
+                server_tools = await connection_manager.list_tools(server, force_refresh=True)
                 tools.extend(server_tools)
                 if server_tools:
                     print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
@@ -758,7 +773,7 @@ async def chat(request: ChatRequest, req: Request):
                         ),
                     }
                 for attempt in range(3):
-                    tools = await connection_manager.list_tools(target_server)
+                    tools = await connection_manager.list_tools(target_server, force_refresh=True)
                     if tools:
                         break
                     await asyncio.sleep(0.3)
@@ -974,18 +989,24 @@ async def chat(request: ChatRequest, req: Request):
             print(f"[{get_timestamp()}] [APPROVAL] LLM rejected: {str(final)[:80]}...", flush=True)
             return {"role": "assistant", "content": final}
 
+    if is_tools_meta_question(user_message) and tools and ("@" in user_message):
+        meta_server = target_server or (all_target_servers[0] if all_target_servers else "server")
+        tool_list = format_mcp_tool_list_markdown(tools)
+        print(
+            f"[{get_timestamp()}] [META] Returning fresh MCP tool list for @{meta_server} "
+            f"({len(tools)} tools): {[t.get('name') for t in tools]}",
+            flush=True,
+        )
+        return {
+            "role": "assistant",
+            "content": f"Available tools for @{meta_server}:\n\n{tool_list}",
+        }
+
     MAX_AGENT_TURNS = 10
     for turn_index in range(MAX_AGENT_TURNS):
         # PACING: Handled by llm_service.py globally now
         turn_start = time.time()
         print(f"\n[{get_timestamp()}] --- [Turn {turn_index + 1}] Processing ---")
-        if tools:
-            print(f"[{get_timestamp()}] [DEBUG] Tools available for LLM: {[t.get('name') for t in tools]}")
-        else:
-            if loop_detected:
-                print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM (loop detected - text only mode)")
-            else:
-                print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
         
         # Handle weather flow selection state - check if last assistant message was asking for location selection
         # This handles the case where user is responding to a location selection request from previous turn
@@ -1294,22 +1315,6 @@ async def chat(request: ChatRequest, req: Request):
                     flush=True,
                 )
 
-        # Meta-question: "what tools available?" -> text-only, list tools (no tool call)
-        # Works for @booking, @weather, any @server - prevents LLM from incorrectly calling a tool
-        msg_low = user_message.lower()
-        is_tools_meta_question = (
-            ("tool" in msg_low or "tools" in msg_low)
-            and any(k in msg_low for k in ["available", "list", "what", "which", "show", "can you use"])
-        )
-        if is_tools_meta_question and tools and ("@" in user_message):
-            tool_list = "\n".join(
-                f"- **{t.get('name', '')}**: {t.get('description', 'No description')[:120]}"
-                for t in tools
-            )
-            meta_tools_list_text = tool_list
-            tools_to_send = []
-            print(f"[{get_timestamp()}] [META] Tools list question detected - responding with text only (no tool call)", flush=True)
-        
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
         if (
             has_booking_tools
@@ -1398,6 +1403,23 @@ async def chat(request: ChatRequest, req: Request):
             except Exception as e:
                 return {"role": "assistant", "content": f"Error: Could not fetch available models: {str(e)}"}
         
+        if tools_to_send:
+            print(
+                f"[{get_timestamp()}] [DEBUG] Tools sent to LLM ({len(tools_to_send)}): "
+                f"{[t.get('name') for t in tools_to_send]}",
+                flush=True,
+            )
+        elif tools:
+            print(
+                f"[{get_timestamp()}] [DEBUG] MCP tools loaded ({len(tools)}) but none sent to LLM "
+                f"(text-only this turn): {[t.get('name') for t in tools]}",
+                flush=True,
+            )
+        elif loop_detected:
+            print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM (loop detected - text only mode)")
+        else:
+            print(f"[{get_timestamp()}] [DEBUG] No tools available for LLM")
+
         llm_start = time.time()
         active_post_tool = post_tool_mode
         post_tool_mode = None

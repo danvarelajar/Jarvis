@@ -420,12 +420,16 @@ class PersistentConnection:
             self._task = None
             print(f"Stopped connection to {self.display_name}")
 
-    async def get_tools(self):
+    async def get_tools(self, force_refresh: bool = False):
         if not self.session:
             return []
             
         current_time = time.time()
-        if self.tools_cache and (current_time - self.tools_cache_timestamp < self.CACHE_TTL):
+        if (
+            not force_refresh
+            and self.tools_cache
+            and (current_time - self.tools_cache_timestamp < self.CACHE_TTL)
+        ):
             print(f"[{get_timestamp()}] [MCP] [{self.display_name}] Using cached tools ({len(self.tools_cache)} tools)")
             return self.tools_cache
             
@@ -1025,16 +1029,16 @@ class GlobalConnectionManager:
     def get_all_sessions(self) -> Dict[str, ClientSession]:
         return {name: conn.session for name, conn in self.connections.items() if conn.session}
 
-    async def list_tools(self, server_name: str = None) -> List[dict]:
+    async def list_tools(self, server_name: str = None, force_refresh: bool = False) -> List[dict]:
         tools = []
         if server_name:
             server_key = (server_name or "").lower() # Normalize
             conn = self.connections.get(server_key)
             if conn:
-                tools.extend(await conn.get_tools())
+                tools.extend(await conn.get_tools(force_refresh=force_refresh))
         else:
             for name, conn in self.connections.items():
-                tools.extend(await conn.get_tools())
+                tools.extend(await conn.get_tools(force_refresh=force_refresh))
         return tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
