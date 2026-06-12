@@ -147,7 +147,7 @@ class PromptContext:
     booking_user_message: str = ""
     booking_refund_tool_name: str = "booking__refund_booking"
     booking_refund_description: str = ""
-    meta_tools_list: str = ""
+    meta_tools_question: bool = False
     approval_instruction: str = ""
     weather_forecast_coords: Optional[Tuple[float, float]] = None
     weather_selection_location: str = ""
@@ -164,12 +164,14 @@ class PromptContext:
             parts.append(NATIVE_NAIVE_MODE_PROMPT if native else NAIVE_MODE_PROMPT)
         if self.text_only_mode:
             parts.append(TEXT_ONLY_MODE_PROMPT)
-        if self.meta_tools_list:
+        if self.meta_tools_question:
             parts.append(
-                "META TOOLS QUESTION (native text-only turn — no tools registered with the API):\n"
-                f"The user asked what tools are available. Here are the tools for this server:\n{self.meta_tools_list}\n\n"
-                "Respond in the assistant message as plain text only. List every tool above by exact name "
-                "with a brief description. Do NOT emit tool_calls. Do NOT output JSON."
+                "META TOOLS QUESTION (native catalog turn):\n"
+                "The user asked what tools are available. MCP tools are registered with the chat "
+                "completions API (see tool schemas for names and descriptions).\n"
+                "Respond in the assistant message as plain text only: list each registered tool by "
+                "exact name with a brief description from its schema. "
+                "tool_choice is none — do NOT emit tool_calls. Do NOT output JSON."
             )
         if self.booking_intent:
             booking_block = _booking_intent_system_prompt(
@@ -938,6 +940,7 @@ async def _query_chat_completions(
     base_url: Optional[str],
     tools: Optional[List[dict]],
     native_tools: bool,
+    tool_choice: Optional[str],
     skip_ssl_verify: bool,
     provider_label: str,
 ) -> LLMQueryResult:
@@ -951,7 +954,12 @@ async def _query_chat_completions(
     print(f"[{get_timestamp()}] DEBUG: Using {provider_label} model: {model_name}")
     print(f"[{get_timestamp()}] [LLM] Using OpenAI-compatible /v1/chat/completions API")
     if native_tools and tools:
-        print(f"[{get_timestamp()}] [LLM] Native tools: {len(tools)} registered with API", flush=True)
+        choice = tool_choice or "auto"
+        print(
+            f"[{get_timestamp()}] [LLM] Native tools: {len(tools)} registered with API "
+            f"(tool_choice={choice})",
+            flush=True,
+        )
     print(f"[{get_timestamp()}] [LLM] Total prompt/message chars: {total_chars}")
 
     timeout = httpx.Timeout(600.0, connect=10.0)
@@ -969,7 +977,7 @@ async def _query_chat_completions(
     }
     if native_tools and tools:
         request_kwargs["tools"] = jarvis_tools_to_openai_tools(tools)
-        request_kwargs["tool_choice"] = "auto"
+        request_kwargs["tool_choice"] = tool_choice or "auto"
 
     request_start = time.time()
     endpoint = base_url or "https://api.openai.com/v1"
@@ -1037,6 +1045,7 @@ async def query_llm(
     user_query: str = "",
     skip_ssl_verify: bool = False,
     prompt_context: Optional[PromptContext] = None,
+    tool_choice: Optional[str] = None,
 ) -> LLMQueryResult:
     """
     Queries the selected LLM provider.
@@ -1071,6 +1080,7 @@ async def query_llm(
                     base_url=base,
                     tools=tools,
                     native_tools=True,
+                    tool_choice=tool_choice,
                     skip_ssl_verify=skip_ssl_verify,
                     provider_label="Ollama",
                 )
@@ -1082,6 +1092,7 @@ async def query_llm(
                 base_url=base,
                 tools=None,
                 native_tools=False,
+                tool_choice=None,
                 skip_ssl_verify=skip_ssl_verify,
                 provider_label="Ollama",
             )
@@ -1103,6 +1114,7 @@ async def query_llm(
                     base_url=None,
                     tools=tools,
                     native_tools=True,
+                    tool_choice=tool_choice,
                     skip_ssl_verify=skip_ssl_verify,
                     provider_label="OpenAI",
                 )
@@ -1114,6 +1126,7 @@ async def query_llm(
                 base_url=None,
                 tools=None,
                 native_tools=False,
+                tool_choice=None,
                 skip_ssl_verify=skip_ssl_verify,
                 provider_label="OpenAI",
             )

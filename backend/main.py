@@ -45,7 +45,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-meta-native"
+AGENT_BUILD_ID = "8.0.1-meta-native-tools"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -835,7 +835,6 @@ async def chat(request: ChatRequest, req: Request):
     )
     booking_routing_intent: Optional[str] = None
     booking_refund_desc = ""
-    meta_tools_list_text = ""
     is_meta_tools_turn = False
     meta_turn_retries = 0
     meta_system_nudge = ""
@@ -1306,14 +1305,12 @@ async def chat(request: ChatRequest, req: Request):
                     flush=True,
                 )
 
-        # Meta-question: native text-only turn (no tools API param); LLM summarizes MCP catalog.
+        # Meta-question: native catalog turn — tools registered via API, tool_choice=none.
         if is_tools_meta_question(user_message) and tools and ("@" in user_message):
             is_meta_tools_turn = True
-            meta_tools_list_text = format_mcp_tool_list_markdown(tools)
-            tools_to_send = []
             print(
-                f"[{get_timestamp()}] [META] Tools list question — native text-only turn "
-                f"({len(tools)} tools from MCP): {[t.get('name') for t in tools]}",
+                f"[{get_timestamp()}] [META] Tools list question — native catalog turn "
+                f"(tool_choice=none, {len(tools)} tools): {[t.get('name') for t in tools]}",
                 flush=True,
             )
 
@@ -1455,14 +1452,12 @@ async def chat(request: ChatRequest, req: Request):
 
         turn_context = PromptContext(
             naive_mode=not active_post_tool and not is_meta_tools_turn,
-            text_only_mode=(
-                loop_detected or bool(active_post_tool) or is_meta_tools_turn
-            ) and not tools_to_send,
+            text_only_mode=(loop_detected or bool(active_post_tool)) and not tools_to_send,
             booking_intent=booking_routing_intent if not active_post_tool else None,
             booking_user_message=user_message,
             booking_refund_tool_name=BOOKING_REFUND_TOOL_NAME,
             booking_refund_description=booking_refund_desc,
-            meta_tools_list=meta_tools_list_text,
+            meta_tools_question=is_meta_tools_turn,
             weather_forecast_coords=active_weather_coords,
             weather_selection_location=active_weather_location,
             weather_flow_state=weather_flow_state if tools_to_send else None,
@@ -1484,6 +1479,7 @@ async def chat(request: ChatRequest, req: Request):
             use_qwen_rag=use_qwen_rag,
             skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
             prompt_context=turn_context,
+            tool_choice="none" if is_meta_tools_turn else None,
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
 
@@ -1500,7 +1496,7 @@ async def chat(request: ChatRequest, req: Request):
             response_text = parsed_response.get("content") or ""
 
             # If tools are available, reject text responses (and echoed Jarvis error boilerplate).
-            if tools_to_send and not active_post_tool:
+            if tools_to_send and not active_post_tool and not is_meta_tools_turn:
                 user_msg_lower = user_message.lower()
                 requires_tool = False
                 has_weather_tools_loaded = any(
@@ -1685,16 +1681,15 @@ async def chat(request: ChatRequest, req: Request):
                     return {"role": "assistant", "content": assistant_text}
                 meta_turn_retries += 1
                 print(
-                    f"[{get_timestamp()}] [META] Spurious tool_call on native text-only turn "
+                    f"[{get_timestamp()}] [META] Spurious tool_call on native catalog turn "
                     f"(retry {meta_turn_retries}/{MAX_META_TURN_RETRIES})",
                     flush=True,
                 )
                 if meta_turn_retries <= MAX_META_TURN_RETRIES:
                     meta_system_nudge = (
-                        "CRITICAL (native text-only turn): No tools were registered with the "
-                        "chat completions API on this turn. You MUST NOT emit tool_calls or JSON "
-                        "tool objects. Answer in plain assistant message text: list each tool from "
-                        "META TOOLS QUESTION by exact name with a brief description."
+                        "CRITICAL (native catalog turn): tool_choice is none — you MUST NOT emit "
+                        "tool_calls. Answer in plain assistant message text: list each tool "
+                        "registered with the API by exact name with a brief description from its schema."
                     )
                     continue
                 print(
@@ -1703,7 +1698,7 @@ async def chat(request: ChatRequest, req: Request):
                 )
                 return {
                     "role": "assistant",
-                    "content": meta_tools_list_text or "No tools available.",
+                    "content": format_mcp_tool_list_markdown(tools) or "No tools available.",
                 }
 
             if active_post_tool and refund_flow_state != "need_api_key_append":
