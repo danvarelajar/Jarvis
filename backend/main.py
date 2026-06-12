@@ -46,7 +46,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-meta-catalog-prompt"
+AGENT_BUILD_ID = "8.0.1-meta-catalog-slim"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -1458,6 +1458,7 @@ async def chat(request: ChatRequest, req: Request):
             booking_refund_tool_name=BOOKING_REFUND_TOOL_NAME,
             booking_refund_description=booking_refund_desc,
             meta_tools_question=is_meta_tools_turn,
+            meta_catalog_tools=tools if is_meta_tools_turn else [],
             weather_forecast_coords=active_weather_coords,
             weather_selection_location=active_weather_location,
             weather_flow_state=weather_flow_state if tools_to_send else None,
