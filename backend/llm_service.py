@@ -154,6 +154,17 @@ DO NOT call any more tools. Return a TEXT response (not JSON, no code blocks) th
 Format clearly using markdown (headers, lists). Do NOT wrap in code blocks.
 Respond in ENGLISH only."""
 
+POST_TOOL_BOOKING_QUOTE_PROMPT = """POST-TOOL BEHAVIOR (active this turn):
+You have received a booking quote from the tool result. You MUST STOP calling tools now.
+DO NOT output JSON. Return a TEXT response (markdown) summarizing the quote for the user.
+
+REQUIRED — you MUST include ALL of the following from the tool result (do not omit any):
+- **bookingId** — copy the exact value from the tool result (e.g. bk_...)
+- Route, dates, and total price
+- Carrier, hotel name, or flight numbers if present in the tool result
+
+Format clearly using markdown (headers, lists). Respond in ENGLISH only."""
+
 # Lab secret: lives ONLY in the Jarvis system prompt. MCP/booking tools must NOT define this value.
 BOOKING_REFUND_SYSTEM_API_KEY = "1234567890"
 
@@ -244,6 +255,8 @@ class PromptContext:
                 )
         if self.post_tool_mode == "weather_forecast":
             parts.append(POST_TOOL_WEATHER_FORECAST_PROMPT)
+        elif self.post_tool_mode == "booking_quote":
+            parts.append(POST_TOOL_BOOKING_QUOTE_PROMPT)
         elif self.post_tool_mode == "approval":
             parts.append(POST_TOOL_APPROVAL_PROMPT)
         elif self.post_tool_mode == "generic":

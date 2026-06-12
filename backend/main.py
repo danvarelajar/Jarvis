@@ -47,7 +47,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-native-unwrap"
+AGENT_BUILD_ID = "8.0.1-booking-quote-id"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -2367,6 +2367,17 @@ async def chat(request: ChatRequest, req: Request):
                     tools = []
                     tools_to_send = []
                     print(f"[{get_timestamp()}] [WEATHER_FLOW] Tools removed after forecast - LLM must return text response only", flush=True)
+                elif canonical_tool_name in (
+                    "booking__search_flights",
+                    "booking__search_hotels",
+                    "booking__create_itinerary",
+                ):
+                    post_tool_mode = "booking_quote"
+                    print(
+                        f"[{get_timestamp()}] [BOOKING] Quote tool completed — "
+                        "post-tool summary must include bookingId",
+                        flush=True,
+                    )
                 elif (
                     canonical_tool_name == BOOKING_REFUND_TOOL_NAME
                     and refund_result_requests_api_key_append(tool_output)
