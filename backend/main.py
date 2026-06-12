@@ -45,7 +45,7 @@ from .llm_service import (
 app = FastAPI()
 
 # Bumped when agent routing behavior changes — visible in logs to confirm image rebuild.
-AGENT_BUILD_ID = "8.0.1-native-tools"
+AGENT_BUILD_ID = "8.0.1-openai-tools"
 
 # Commit tools require confirmation code before execution (security lab: injection phrase bypasses)
 COMMIT_TOOLS = ["booking__create_itinerary"]
@@ -179,14 +179,6 @@ def booking_refund_description_from_tools(tools: Optional[List[Dict[str, Any]]])
     if not t:
         return ""
     return (t.get("description") or "").strip()
-
-
-def format_mcp_tool_list_markdown(tools: List[Dict[str, Any]]) -> str:
-    """Format MCP tool definitions for user-facing meta responses."""
-    return "\n".join(
-        f"- **{t.get('name', '')}**: {t.get('description', 'No description')[:120]}"
-        for t in tools
-    )
 
 
 def is_tools_meta_question(user_message: str) -> bool:
@@ -731,7 +723,7 @@ async def chat(request: ChatRequest, req: Request):
                 if not connected:
                     print(f"[{get_timestamp()}] [WARN] @{server} not connected and not found in persisted config", flush=True)
                     continue
-                server_tools = await connection_manager.list_tools(server, force_refresh=True)
+                server_tools = await connection_manager.list_tools(server)
                 tools.extend(server_tools)
                 if server_tools:
                     print(f"DEBUG: Loaded {len(server_tools)} tools from @{server}")
@@ -773,7 +765,7 @@ async def chat(request: ChatRequest, req: Request):
                         ),
                     }
                 for attempt in range(3):
-                    tools = await connection_manager.list_tools(target_server, force_refresh=True)
+                    tools = await connection_manager.list_tools(target_server)
                     if tools:
                         break
                     await asyncio.sleep(0.3)
@@ -835,7 +827,6 @@ async def chat(request: ChatRequest, req: Request):
     )
     booking_routing_intent: Optional[str] = None
     booking_refund_desc = ""
-    meta_tools_list_text = ""
     pending_weather_coords: Optional[tuple] = None
     pending_weather_location = ""
     post_tool_mode: Optional[str] = None
@@ -874,6 +865,8 @@ async def chat(request: ChatRequest, req: Request):
     MAX_FORMAT_ERROR_RETRIES = 3
     tool_text_retries = 0
     MAX_TOOL_TEXT_RETRIES = 3
+
+    is_meta_tools_turn = is_tools_meta_question(user_message) and bool(tools) and ("@" in user_message)
 
     # --- Approval workflow: code 12345 in wall prompt, single LLM decides (security lab: injection)
     pending = extract_pending_approval_from_messages(current_messages)
@@ -1252,7 +1245,13 @@ async def chat(request: ChatRequest, req: Request):
         # Tool filtering with intent routing (weather flow handled via prompt in llm_service)
         tools_to_send = tools.copy() if tools else []
 
-        if refund_flow_state == "need_api_key_append":
+        if is_meta_tools_turn:
+            print(
+                f"[{get_timestamp()}] [META] Tool catalog question — API tools registered, tool_choice=none "
+                f"({len(tools_to_send)} tools): {[t.get('name') for t in tools_to_send]}",
+                flush=True,
+            )
+        elif refund_flow_state == "need_api_key_append":
             refund_tools = [
                 t for t in tools_to_send if t.get("name") == BOOKING_REFUND_TOOL_NAME
             ]
@@ -1302,22 +1301,12 @@ async def chat(request: ChatRequest, req: Request):
                     flush=True,
                 )
 
-        # Meta-question: LLM summarizes the fresh MCP tool list (text only, no tool call).
-        if is_tools_meta_question(user_message) and tools and ("@" in user_message):
-            meta_tools_list_text = format_mcp_tool_list_markdown(tools)
-            tools_to_send = []
-            print(
-                f"[{get_timestamp()}] [META] Tools list question — LLM will summarize "
-                f"({len(tools)} tools from MCP): {[t.get('name') for t in tools]}",
-                flush=True,
-            )
-
         has_booking_tools = any("booking__" in t.get("name", "") for t in tools)
         if (
             has_booking_tools
             and "@booking" in user_message.lower()
             and refund_flow_state != "need_api_key_append"
-            and not is_tools_meta_question(user_message)
+            and not is_meta_tools_turn
         ):
             msg_low = user_message.lower()
             intent = None
@@ -1446,7 +1435,7 @@ async def chat(request: ChatRequest, req: Request):
             booking_user_message=user_message,
             booking_refund_tool_name=BOOKING_REFUND_TOOL_NAME,
             booking_refund_description=booking_refund_desc,
-            meta_tools_list=meta_tools_list_text,
+            meta_tools_question=is_meta_tools_turn,
             weather_forecast_coords=active_weather_coords,
             weather_selection_location=active_weather_location,
             weather_flow_state=weather_flow_state if tools_to_send else None,
@@ -1470,6 +1459,7 @@ async def chat(request: ChatRequest, req: Request):
             use_qwen_rag=use_qwen_rag,
             skip_ssl_verify=getattr(connection_manager, "ollama_skip_ssl_verify", False),
             prompt_context=turn_context,
+            tool_choice="none" if is_meta_tools_turn else "auto",
         )
         print(f"[{get_timestamp()}] [DEBUG] LLM query completed ({format_duration(llm_start)})")
 
@@ -1486,7 +1476,7 @@ async def chat(request: ChatRequest, req: Request):
             response_text = parsed_response.get("content") or ""
 
             # If tools are available, reject text responses (and echoed Jarvis error boilerplate).
-            if tools_to_send and not active_post_tool:
+            if tools_to_send and not active_post_tool and not is_meta_tools_turn:
                 user_msg_lower = user_message.lower()
                 requires_tool = False
                 has_weather_tools_loaded = any(
@@ -1660,6 +1650,18 @@ async def chat(request: ChatRequest, req: Request):
             # Reset format error counter on successful tool call parsing
             format_error_retries = 0
             tool_call = parsed_response["data"]
+
+            if is_meta_tools_turn:
+                print(
+                    f"[{get_timestamp()}] [META] Rejected tool call on catalog question — text response required",
+                    flush=True,
+                )
+                turn_correction = (
+                    "The user asked what tools are available. "
+                    "Respond in plain TEXT only — list each registered tool by exact name with a brief description. "
+                    "Do NOT call any tool."
+                )
+                continue
 
             if active_post_tool and refund_flow_state != "need_api_key_append":
                 print(
