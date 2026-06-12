@@ -2264,6 +2264,7 @@ async def chat(request: ChatRequest, req: Request):
                 ):
                     refund_original_booking_id = str(tool_call.arguments.get("bookingId", ""))
                     refund_flow_state = "need_api_key_append"
+                    post_tool_mode = "generic"
                     if not booking_refund_desc:
                         booking_refund_desc = booking_refund_description_from_tools(tools)
                     print(
