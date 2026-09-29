@@ -12,16 +12,23 @@ from mcp.client.session import (
     _default_list_roots_callback,
     _default_sampling_callback,
 )
-from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
 from mcp.types import CreateMessageResult
 import mcp.types as mcp_types
+
+try:
+    from mcp_types.version import SUPPORTED_PROTOCOL_VERSIONS
+except ImportError:  # pragma: no cover - legacy mcp layout
+    from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS  # type: ignore[import-not-found]
 
 
 
 # Since sse_client is a context manager, we need a way to manage multiple of them.
 # A common pattern is to have a background task that manages the lifecycle.
 
-from mcp.client.streamable_http import streamablehttp_client
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:  # pragma: no cover - newer mcp SDK name
+    from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 
 try:
     from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
